@@ -459,7 +459,57 @@ textarea.fi{min-height:65px}
 
 /* SKILL FRAMES */
 .skill-ring{position:absolute;border-radius:8px;pointer-events:none}
-.skill-tag{position:absolute;top:-8px;font-size:7px;padding:0 5px;border-radius:2px;font-family:'IBM Plex Mono',monospace;letter-spacing:.06em;background:#0a0808}
+.skill-tag{position:absolute;top:-8px;font-size:7px;padding:1px 6px;border-radius:2px;font-family:'IBM Plex Mono',monospace;letter-spacing:.06em;background:#0d0b0a;cursor:pointer;pointer-events:all;transition:.12s}
+.skill-tag:hover{filter:brightness(1.4)}
+
+/* Footer skill button */
+.nfoot-sk{background:transparent;border:none;font-size:8px;color:#4a7abf;cursor:pointer;font-family:'IBM Plex Mono',monospace;letter-spacing:.04em;padding:1px 5px;border-radius:2px;display:none;align-items:center;gap:3px;transition:.12s}
+.nfoot-sk:hover{background:rgba(74,122,191,.1);color:#7aabef}
+
+/* SKILL ADAPT PANEL */
+#skillwin{position:fixed;inset:0;z-index:620;background:rgba(0,0,0,.75);display:none;align-items:center;justify-content:center;backdrop-filter:blur(8px)}
+#skillwin.open{display:flex}
+#skillbox{width:520px;max-height:74vh;background:#161210;border:1px solid rgba(74,122,191,.25);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 32px 80px rgba(0,0,0,.85),0 0 0 1px rgba(74,122,191,.08)}
+#skillbox-head{padding:11px 15px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:10px;background:rgba(0,0,0,.3);flex-shrink:0}
+.skh-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.skh-title{font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:600;flex:1;color:#ddd8cc}
+.skh-sub{font-size:9px;color:#5a5248;font-family:'IBM Plex Mono',monospace;letter-spacing:.06em}
+.skcls{background:transparent;border:none;color:#3a3630;font-size:14px;cursor:pointer;padding:2px 5px;border-radius:2px}
+.skcls:hover{background:rgba(255,255,255,.06);color:#706860}
+#skillbox-tabs{display:flex;border-bottom:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.2);flex-shrink:0}
+.sktab{padding:7px 13px;font-size:9px;letter-spacing:.07em;color:#3a3630;cursor:pointer;border-bottom:2px solid transparent;transition:.12s;text-transform:uppercase;font-family:'IBM Plex Mono',monospace;display:flex;align-items:center;gap:5px}
+.sktab.on{color:#4a9aef;border-bottom-color:#4a7abf}
+.sktab:hover:not(.on){color:#706860}
+#skillbox-body{flex:1;overflow-y:auto;padding:14px 15px;display:flex;flex-direction:column;gap:10px}
+#skillbox-body::-webkit-scrollbar{width:3px}
+#skillbox-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08)}
+.sk-card{background:#0e0c0a;border:1px solid rgba(255,255,255,.07);border-radius:5px;overflow:hidden;transition:.12s}
+.sk-card:hover{border-color:rgba(74,122,191,.25)}
+.sk-card-head{padding:8px 11px;display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(255,255,255,.05)}
+.sk-card-n{font-size:10px;color:#9a9088;font-family:'IBM Plex Sans',sans-serif;font-weight:600;flex:1}
+.sk-card-tag{font-size:8px;padding:1px 6px;border-radius:2px;background:rgba(74,122,191,.1);color:#4a7abf;letter-spacing:.04em}
+.sk-card-cmd{padding:8px 11px;background:#090807;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#5a9a6a;letter-spacing:.02em;line-height:1.5;border-bottom:1px solid rgba(255,255,255,.04);position:relative;cursor:pointer}
+.sk-card-cmd:hover .sk-copy{opacity:1}
+.sk-card-cmd code{color:#7abf7a}
+.sk-copy{position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:8px;color:#4a7abf;opacity:0;transition:.1s;background:#0e0c0a;padding:2px 6px;border-radius:2px;pointer-events:none}
+.sk-card-desc{padding:7px 11px;font-size:9px;color:#5a5248;line-height:1.5}
+#skillbox-footer{padding:10px 15px;border-top:1px solid rgba(255,255,255,.06);display:flex;gap:8px;background:rgba(0,0,0,.25);flex-shrink:0}
+.sk-apply-btn{flex:1;background:rgba(74,122,191,.12);border:1px solid rgba(74,122,191,.25);color:#4a9aef;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;padding:6px 12px;border-radius:4px;cursor:pointer;transition:.12s;letter-spacing:.04em}
+.sk-apply-btn:hover{background:rgba(74,122,191,.22);border-color:rgba(74,122,191,.5)}
+.sk-remove-btn{background:transparent;border:1px solid rgba(138,42,42,.3);color:#8a4a4a;font-family:'IBM Plex Mono',monospace;font-size:10px;padding:6px 10px;border-radius:4px;cursor:pointer;transition:.12s}
+.sk-remove-btn:hover{background:rgba(138,42,42,.1);border-color:rgba(138,42,42,.6);color:#c85050}
+.sk-close-btn{background:transparent;border:1px solid rgba(255,255,255,.08);color:#706860;font-family:'IBM Plex Mono',monospace;font-size:10px;padding:6px 10px;border-radius:4px;cursor:pointer;transition:.12s}
+.sk-close-btn:hover{background:rgba(255,255,255,.05)}
+
+/* Skill drag-over highlight */
+.node.skill-over{border-color:rgba(74,122,191,.7) !important;box-shadow:0 0 0 2px rgba(74,122,191,.25),0 4px 32px rgba(0,0,0,.6) !important}
+.node.skill-over .node-inner{outline:1px solid rgba(74,122,191,.2)}
+
+/* Skills catalog in sidebar */
+.ps-skill{display:flex;align-items:center;gap:7px;padding:5px 10px;border-radius:3px;cursor:grab;font-size:10px;color:#5a80a0;transition:.12s;margin-bottom:1px;border-left:2px solid rgba(74,122,191,.2)}
+.ps-skill:hover{background:rgba(74,122,191,.06);color:#8ab0d0;border-left-color:rgba(74,122,191,.5)}
+.ps-skill-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.ps-skill-desc{font-size:8px;color:#3a3630;margin-left:auto;letter-spacing:.04em}
 </style>
 </head>
 <body>
@@ -502,6 +552,16 @@ textarea.fi{min-height:65px}
       <div class="ps-agent" draggable="true" ondragstart="pd(event,'video')"><div class="ps-adot" style="background:#0e1e4a"></div>Video</div>
       <div class="ps-agent" draggable="true" ondragstart="pd(event,'assembly')"><div class="ps-adot" style="background:#3a1a08"></div>Ensamblaje</div>
       <div class="ps-agent" draggable="true" ondragstart="pd(event,'human')"><div class="ps-adot" style="background:#c8a040"></div>Operador</div>
+    </div>
+    <div class="ps-div"></div>
+    <div class="ps-sec">
+      <div class="ps-lbl">Skills — arrastra a un agente</div>
+      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'web_search')"><div class="ps-skill-dot" style="background:#2a6a8a"></div>⌕ web_search<span class="ps-skill-desc">búsqueda</span></div>
+      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'notion_mcp')"><div class="ps-skill-dot" style="background:#2a2a5a"></div>📋 notion_mcp<span class="ps-skill-desc">MCP</span></div>
+      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'github_mcp')"><div class="ps-skill-dot" style="background:#1a3a1a"></div>⬡ github_mcp<span class="ps-skill-desc">MCP</span></div>
+      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'image_gen')"><div class="ps-skill-dot" style="background:#2a1060"></div>⬡ image_gen<span class="ps-skill-desc">imagen</span></div>
+      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'voice_tts')"><div class="ps-skill-dot" style="background:#1a3a2a"></div>♪ voice_tts<span class="ps-skill-desc">audio</span></div>
+      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'email_send')"><div class="ps-skill-dot" style="background:#3a1a3a"></div>✉ email_send<span class="ps-skill-desc">email</span></div>
     </div>
   </div>
 </div>
@@ -612,6 +672,24 @@ textarea.fi{min-height:65px}
     </div>
   </div>
   <div id="awin-resize"></div>
+</div>
+
+<!-- SKILL ADAPT PANEL -->
+<div id="skillwin" onclick="if(event.target===this)closeSkillAdapt()">
+  <div id="skillbox">
+    <div id="skillbox-head">
+      <div class="skh-dot" id="skh-dot"></div>
+      <div style="flex:1"><div class="skh-title" id="skh-title">Cómo integrar skills</div><div class="skh-sub" id="skh-sub"></div></div>
+      <button class="skcls" onclick="closeSkillAdapt()">✕</button>
+    </div>
+    <div id="skillbox-tabs"></div>
+    <div id="skillbox-body"></div>
+    <div id="skillbox-footer">
+      <button class="sk-apply-btn" id="sk-apply-btn">⬡ Agregar al prompt del agente</button>
+      <button class="sk-remove-btn" id="sk-remove-btn">✕ Quitar skill</button>
+      <button class="sk-close-btn" onclick="closeSkillAdapt()">Cerrar</button>
+    </div>
+  </div>
 </div>
 
 <!-- EXPAND WINDOW -->
@@ -727,6 +805,15 @@ let drag=null,dox=0,doy=0;
 let cardDrag=null,cdox=0,cdoy=0;
 let pan=false,psx=0,psy=0,ppx=0,ppy=0;
 let connMode=false,connFrom=null;
+let palSkill=null;
+const SKILLS_CATALOG=[
+  {id:'web_search',name:'web_search',icon:'⌕',color:'#2a6a8a'},
+  {id:'notion_mcp',name:'notion_mcp',icon:'📋',color:'#2a2a5a'},
+  {id:'github_mcp',name:'github_mcp',icon:'⬡',color:'#1a3a1a'},
+  {id:'image_gen',name:'image_gen',icon:'⬡',color:'#2a1060'},
+  {id:'voice_tts',name:'voice_tts',icon:'♪',color:'#1a3a2a'},
+  {id:'email_send',name:'email_send',icon:'✉',color:'#3a1a3a'},
+];
 let sel=null,modalId=null,ctab='cfg';
 let palT=null,ctxId=null;
 let expandTarget=null,expandFieldName=null;
@@ -849,8 +936,8 @@ function mkNode(n){
 
   // Skill rings — outside wrapper
   const skillRingsHTML=(n.skills||[]).map((sk,i)=>`
-    <div class="skill-ring" style="inset:-${(i+1)*5}px;border:1px solid ${sk.color||'#4a7abf'}33;border-radius:${7+(i+1)*2}px;box-shadow:0 0 ${8+(i*4)}px ${sk.color||'#4a7abf'}12">
-      <div class="skill-tag" style="left:${8+i*4}px;color:${sk.color||'#4a7abf'};border:1px solid ${sk.color||'#4a7abf'}22">⬡ ${sk.name}</div>
+    <div class="skill-ring" style="inset:-${(i+1)*6}px;border:1.5px solid ${sk.color||'#4a7abf'}88;border-radius:${8+(i+1)*2}px;box-shadow:0 0 ${10+(i*5)}px ${sk.color||'#4a7abf'}44">
+      <div class="skill-tag" onclick="event.stopPropagation();openSkillAdapt('${n.id}')" style="left:${8+i*5}px;color:${sk.color||'#4a7abf'};border:1px solid ${sk.color||'#4a7abf'}66;text-shadow:0 0 6px ${sk.color||'#4a7abf'}88">⬡ ${sk.name}</div>
     </div>`).join('');
 
   el.innerHTML=`
@@ -880,6 +967,7 @@ function mkNode(n){
         ${actionsHTML(n)}
         <div class="nfoot">
           <span class="nfoot-st" id="fst_${n.id}">${stlabel(n.status)}</span>
+          <button class="nfoot-sk" id="fsk_${n.id}" onclick="event.stopPropagation();openSkillAdapt('${n.id}')" style="display:${n.skills&&n.skills.length?'inline-flex':'none'}">⬡ SKILLS</button>
           <button class="nfoot-cfg" onclick="openM('${n.id}')">⚙ CONFIG</button>
         </div>
       </div>
@@ -887,6 +975,16 @@ function mkNode(n){
 
   el.addEventListener('mousedown',e=>nmd(e,n.id));
   el.addEventListener('dblclick',()=>openM(n.id));
+  el.addEventListener('dragover',e=>{e.preventDefault();e.stopPropagation();if(palSkill)el.classList.add('skill-over');});
+  el.addEventListener('dragleave',e=>{if(!el.contains(e.relatedTarget))el.classList.remove('skill-over');});
+  el.addEventListener('drop',e=>{
+    el.classList.remove('skill-over');
+    e.stopPropagation();
+    if(!palSkill){drop(e);return;}
+    const sk=SKILLS_CATALOG.find(s=>s.id===palSkill)||customSkills.find(s=>s.id===palSkill);
+    if(sk)addSkillToNode(n.id,sk);
+    palSkill=null;
+  });
   el.querySelectorAll('.port').forEach(p=>{
     p.addEventListener('mousedown',e=>{if(connMode){e.stopPropagation();connFrom={nid:n.id,pt:p.dataset.pt,src:'node'};}});
     p.addEventListener('mouseup',e=>{if(connMode&&connFrom&&connFrom.nid!==n.id){e.stopPropagation();finishConn(n.id,p.dataset.pt);}});
@@ -1374,11 +1472,41 @@ function assignSkillToNode(nodeId,skill){
 // ══════════════════════════════
 // DRAG FROM PALETTE
 // ══════════════════════════════
-function pd(e,type){palT=type;}
+function pd(e,type){palT=type;palSkill=null;closeSide();}
+function sdrag(e,skillId){
+  palSkill=skillId;palT=null;closeSide();
+  const sk=SKILLS_CATALOG.find(s=>s.id===skillId)||customSkills.find(s=>s.id===skillId);
+  const ghost=document.createElement('div');
+  ghost.style.cssText='position:fixed;top:-999px;left:-999px;background:#0af;border:2px solid #5df;border-radius:5px;padding:5px 12px;color:#fff;font-family:IBM Plex Mono,monospace;font-size:11px;font-weight:600;box-shadow:0 0 18px #00aaff99,0 0 6px #00ddff44;letter-spacing:.06em;white-space:nowrap;pointer-events:none';
+  ghost.textContent='⬡ '+(sk?sk.name:skillId);
+  document.body.appendChild(ghost);
+  e.dataTransfer.setDragImage(ghost,ghost.offsetWidth/2+8,ghost.offsetHeight/2);
+  setTimeout(()=>{if(ghost.parentNode)ghost.parentNode.removeChild(ghost);},0);
+}
 function drop(e){
+  palSkill=null; // skill dropped on empty canvas — ignore
   if(!palT)return;const wrap=document.getElementById('wrap').getBoundingClientRect();
   addNode(palT,(e.clientX-wrap.left-px)/sc-115,(e.clientY-wrap.top-py)/sc-100);
   palT=null;drawConns();updateMM();
+}
+
+// ══════════════════════════════
+// SKILL → NODE
+// ══════════════════════════════
+function addSkillToNode(nodeId,skillDef){
+  const n=nodes.find(x=>x.id===nodeId);if(!n)return;
+  if(n.skills.some(s=>s.id===skillDef.id)){glog('warn',n.name,n.type,'Skill ya asignada: '+skillDef.name);return;}
+  n.skills.push({id:skillDef.id,name:skillDef.name,color:skillDef.color});
+  refreshNodeSkillRings(n);
+  glog('done',n.name,n.type,'⬡ Skill asignada: '+skillDef.name);
+}
+function refreshNodeSkillRings(n){
+  const el=document.getElementById(n.id);if(!el)return;
+  el.querySelectorAll('.skill-ring').forEach(r=>r.remove());
+  const html=(n.skills||[]).map((sk,i)=>`<div class="skill-ring" style="inset:-${(i+1)*6}px;border:1.5px solid ${sk.color||'#4a7abf'}88;border-radius:${8+(i+1)*2}px;box-shadow:0 0 ${10+(i*5)}px ${sk.color||'#4a7abf'}44"><div class="skill-tag" onclick="event.stopPropagation();openSkillAdapt('${n.id}')" style="left:${8+i*5}px;color:${sk.color||'#4a7abf'};border:1px solid ${sk.color||'#4a7abf'}66;text-shadow:0 0 6px ${sk.color||'#4a7abf'}88">⬡ ${sk.name}</div></div>`).join('');
+  el.insertAdjacentHTML('afterbegin',html);
+  const btn=document.getElementById('fsk_'+n.id);
+  if(btn)btn.style.display=n.skills.length?'inline-flex':'none';
 }
 
 // ══════════════════════════════
@@ -1700,6 +1828,192 @@ function initAwinDrag(){if(_ad)return;_ad=true;let dr=false,ox=0,oy=0;const bar=
 function initAwinResize(){if(_ar)return;_ar=true;let rs=false,sY=0,sH=0;const h=document.getElementById('awin-resize'),win=document.getElementById('agentwin');h.addEventListener('mousedown',e=>{rs=true;sY=e.clientY;sH=win.offsetHeight;e.preventDefault();});document.addEventListener('mousemove',e=>{if(!rs)return;win.style.height=Math.max(200,Math.min(700,sH-(e.clientY-sY)))+'px';awinPrevH=win.offsetHeight;});document.addEventListener('mouseup',()=>{rs=false;});}
 
 // ══════════════════════════════
+// SKILL ADAPT PANEL
+// ══════════════════════════════
+const SKILL_EXAMPLES={
+  web_search:{
+    research:[
+      {title:'Tendencias en tiempo real',cmd:'search("top AI trends site:twitter.com OR reddit.com")',desc:'Busca los temas más virales antes de rankear ideas para el pipeline'},
+      {title:'Verificar engagement previo',cmd:'search("topic viral videos last 30 days -site:youtube.com")',desc:'Confirma que el tema tiene tracción real antes de pasar al Piloto'},
+      {title:'Análisis de competencia',cmd:'search("competitor channel uploads last week site:youtube.com")',desc:'Detecta qué están produciendo canales similares para diferenciarte'},
+    ],
+    pilot:[
+      {title:'Estado de APIs externas',cmd:'search("site:status.openai.com OR status.runway.ml incidents")',desc:'Verifica uptime de herramientas antes de lanzar el pipeline completo'},
+      {title:'Documentación actualizada',cmd:'search("runway gen3 alpha API parameters 2025")',desc:'Consulta parámetros actualizados de herramientas antes de configurar agentes'},
+    ],
+    prompt:[
+      {title:'Referencias visuales',cmd:'search("cinematic lighting reference 4K photography site:pinterest.com")',desc:'Enriquece los prompts con terminología y referencias visuales actuales'},
+      {title:'Estilo de directores',cmd:'search("Christopher Nolan lighting cinematography breakdown")',desc:'Agrega referencias de directores reconocidos para coherencia visual'},
+    ],
+    image:[
+      {title:'Referencia de escena',cmd:'search("scene reference photography filetype:jpg")',desc:'Trae imágenes reales como guía de composición para el modelo generativo'},
+    ],
+    default:[
+      {title:'Consultar información',cmd:'search("query relevante al contexto")',desc:'Enriquece el contexto del agente con datos actuales de la web'},
+      {title:'Verificar datos',cmd:'search("fact-check dato específico site:fuente.com")',desc:'Confirma información externa antes de continuar el pipeline'},
+    ]
+  },
+  notion_mcp:{
+    pilot:[
+      {title:'Leer brief del cliente',cmd:'notion.query(database="Clientes", filter={status:"Activo"})',desc:'Carga el contexto completo del proyecto al iniciar el pipeline'},
+      {title:'Actualizar estado del pipeline',cmd:'notion.update(page_id, {status:"En progreso", started_at: now()})',desc:'Refleja el estado en tiempo real en el dashboard del equipo'},
+      {title:'Log de ejecución',cmd:'notion.create(db="Logs Pipeline", {nombre, timestamp, resultado, errores})',desc:'Registra cada ejecución para trazabilidad y auditoría'},
+    ],
+    research:[
+      {title:'Guardar ideas aprobadas',cmd:'notion.create(db="Ideas Contenido", {titulo, score, fecha, estado:"aprobada"})',desc:'Persiste la lista de ideas para revisiones futuras del equipo'},
+      {title:'Evitar repetición de temas',cmd:'notion.query(db="Historial Videos", sort="fecha desc", limit=50)',desc:'Consulta temas ya producidos antes de rankear nuevas ideas'},
+    ],
+    assembly:[
+      {title:'Metadatos para publicación',cmd:'notion.update(page_id, {titulo, descripcion, tags, plataforma, fecha_pub})',desc:'Escribe los metadatos finales del video listos para el gestor de redes'},
+      {title:'Checklist de calidad',cmd:'notion.update(checklist_id, items=["audio","colores","subtitulos","thumbnail"])',desc:'Marca los items completados del checklist de entrega'},
+    ],
+    default:[
+      {title:'Leer contexto',cmd:'notion.query(database_id, {filter, sort})',desc:'Carga información relevante desde Notion al iniciar la tarea'},
+      {title:'Escribir resultado',cmd:'notion.create(page, {title, content: output, date: now()})',desc:'Persiste el output del agente en la base de datos del equipo'},
+    ]
+  },
+  github_mcp:{
+    pilot:[
+      {title:'Versionar configuración',cmd:'github.push(repo, "config/pipeline.json", JSON.stringify(config), "update pipeline config")',desc:'Versiona automáticamente los cambios de configuración del pipeline'},
+      {title:'Crear issue si falla',cmd:'github.create_issue(repo, {title:"Pipeline failed", body: error_log, labels:["bug"]})',desc:'Abre un issue con el log completo de errores para el equipo de desarrollo'},
+    ],
+    research:[
+      {title:'Guardar resultados en repo',cmd:'github.push(repo, "data/ideas_"+date+".json", JSON.stringify(ideas))',desc:'Archiva los resultados de investigación con historial de versiones'},
+    ],
+    default:[
+      {title:'Pushear output',cmd:'github.push(repo, path, content, commit_message)',desc:'Sube el output del agente al repositorio con mensaje de commit'},
+      {title:'Leer configuración',cmd:'github.get_file(repo, "config/settings.json", branch="main")',desc:'Carga configuración versionada desde el repositorio'},
+    ]
+  },
+  image_gen:{
+    image:[
+      {title:'Generar imagen principal',cmd:'flux.imagine(prompt, {model:"flux-pro", ratio:"16:9", steps:30})',desc:'Genera la imagen fotorrealista de la escena con Flux Pro'},
+      {title:'Variaciones de estilo',cmd:'flux.batch(prompt, {seeds:[42,99,137], style:"cinematic", n:3})',desc:'Crea 3 variaciones y selecciona la más coherente con el guión'},
+      {title:'Upscale automático',cmd:'esrgan.upscale(image_id, {factor:4, model:"real-esrgan-x4"})',desc:'Mejora resolución a 4K antes de pasar al agente Video'},
+    ],
+    prompt:[
+      {title:'Preview rápido del prompt',cmd:'flux.imagine(prompt_draft, {steps:8, quick:true, width:512})',desc:'Genera un preview en segundos para validar el prompt antes de producción'},
+    ],
+    pilot:[
+      {title:'Generar thumbnail del pipeline',cmd:'flux.imagine("thumbnail for "+pipeline_name, {style:"tech", ratio:"16:9"})',desc:'Crea una imagen representativa del pipeline para el dashboard'},
+    ],
+    default:[
+      {title:'Generar imagen',cmd:'flux.imagine(prompt, {width:1920, height:1080, format:"png"})',desc:'Genera imagen base en resolución Full HD para el pipeline'},
+    ]
+  },
+  voice_tts:{
+    assembly:[
+      {title:'Narración del video',cmd:'tts.generate(script, {voice:"es-female-neutral", speed:0.95, format:"mp3"})',desc:'Genera el voiceover completo del guión sincronizado con el video'},
+      {title:'Ajustar timing',cmd:'tts.generate(script, {target_duration: video_length, auto_pace:true})',desc:'Sincroniza automáticamente la narración con la duración exacta del clip'},
+    ],
+    prompt:[
+      {title:'Preview narrativo',cmd:'tts.preview(prompt_text, {voice:"es-male", speed:1.0})',desc:'Escucha el prompt narrado para detectar incoherencias antes de producción'},
+    ],
+    human:[
+      {title:'Leer opciones al operador',cmd:'tts.generate(options_summary, {voice:"es-neutral", alert:true})',desc:'Narra las opciones pendientes de aprobación para revisión sin pantalla'},
+    ],
+    default:[
+      {title:'Text-to-speech',cmd:'tts.generate(text, {voice:"es-neutral", format:"mp3", quality:"high"})',desc:'Convierte el output del agente a audio para el siguiente paso del pipeline'},
+    ]
+  },
+  email_send:{
+    pilot:[
+      {title:'Notificar fin de pipeline',cmd:'email.send({to:client_email, subject:"Pipeline completado ✓", body:summary, attach:[report]})',desc:'Envía resumen automático al cliente al completarse el pipeline'},
+      {title:'Alerta de fallo',cmd:'email.send({to:team_email, subject:"⚠ Pipeline failed", body:error_log, priority:"high"})',desc:'Notifica inmediatamente al equipo si algún agente falla en producción'},
+    ],
+    human:[
+      {title:'Enviar para aprobación externa',cmd:'email.send({to:approver, subject:"Revisar ideas — acción requerida", body:ideas_html, attach:[pdf_report]})',desc:'Manda las opciones al operador externo para aprobación cuando no está en el sistema'},
+    ],
+    research:[
+      {title:'Reporte semanal de tendencias',cmd:'email.send({to:team, subject:"Tendencias semana "+week, body:formatted_ideas, schedule:"weekly"})',desc:'Envía automáticamente el reporte de investigación al equipo cada semana'},
+    ],
+    default:[
+      {title:'Enviar notificación',cmd:'email.send({to, subject, body, attachments:[]})',desc:'Notifica por email al finalizar la tarea del agente'},
+    ]
+  }
+};
+
+let skillAdaptNodeId=null,skillAdaptSkillIdx=0;
+
+function openSkillAdapt(nodeId){
+  const n=nodes.find(x=>x.id===nodeId);if(!n||!n.skills.length)return;
+  skillAdaptNodeId=nodeId;skillAdaptSkillIdx=0;
+  const tp=T[n.type];
+  document.getElementById('skh-dot').style.background=tp.dot||'#4a7abf';
+  document.getElementById('skh-title').textContent='Integrar skills con '+n.name;
+  document.getElementById('skh-sub').textContent=n.skills.map(s=>s.name).join(' · ');
+  renderSkillAdaptTabs(n);
+  renderSkillAdaptBody(n,0);
+  document.getElementById('sk-apply-btn').onclick=()=>applySkillToPrompt(nodeId);
+  document.getElementById('sk-remove-btn').onclick=()=>removeSkillFromNode(nodeId,skillAdaptSkillIdx);
+  document.getElementById('skillwin').classList.add('open');
+}
+function closeSkillAdapt(){document.getElementById('skillwin').classList.remove('open');skillAdaptNodeId=null;}
+
+function renderSkillAdaptTabs(n){
+  const tabs=document.getElementById('skillbox-tabs');
+  tabs.innerHTML=n.skills.map((sk,i)=>`<div class="sktab ${i===0?'on':''}" onclick="selectSkillTab(${i})" style="${i===0?'color:'+sk.color+';border-bottom-color:'+sk.color:''}"><span style="color:${sk.color}">⬡</span>${sk.name}</div>`).join('');
+}
+function selectSkillTab(i){
+  skillAdaptSkillIdx=i;
+  const n=nodes.find(x=>x.id===skillAdaptNodeId);if(!n)return;
+  document.querySelectorAll('.sktab').forEach((t,ti)=>{
+    const sk=n.skills[ti];
+    t.classList.toggle('on',ti===i);
+    t.style.color=ti===i?(sk.color||'#4a7abf'):'';
+    t.style.borderBottomColor=ti===i?(sk.color||'#4a7abf'):'';
+  });
+  renderSkillAdaptBody(n,i);
+}
+function renderSkillAdaptBody(n,idx){
+  const sk=n.skills[idx];if(!n||!sk)return;
+  const catalog=SKILL_EXAMPLES[sk.id]||{};
+  const examples=catalog[n.type]||catalog.default||[{title:'Uso general',cmd:sk.name+'(input)',desc:'Conecta esta skill al flujo de trabajo del agente'}];
+  document.getElementById('skillbox-body').innerHTML=examples.map(ex=>`
+    <div class="sk-card">
+      <div class="sk-card-head">
+        <span class="sk-card-n">${ex.title}</span>
+        <span class="sk-card-tag">${sk.name}</span>
+      </div>
+      <div class="sk-card-cmd" onclick="copySkillCmd(this)" title="Click para copiar">
+        <code>${ex.cmd}</code>
+        <span class="sk-copy">copiar</span>
+      </div>
+      <div class="sk-card-desc">${ex.desc}</div>
+    </div>`).join('');
+}
+function copySkillCmd(el){
+  const text=el.querySelector('code').textContent;
+  navigator.clipboard?.writeText(text);
+  const hint=el.querySelector('.sk-copy');
+  hint.textContent='✓ copiado';hint.style.opacity='1';hint.style.color='#3a8a3a';
+  setTimeout(()=>{hint.textContent='copiar';hint.style.opacity='';hint.style.color='';},1500);
+}
+function applySkillToPrompt(nodeId){
+  const n=nodes.find(x=>x.id===nodeId);if(!n)return;
+  const sk=n.skills[skillAdaptSkillIdx];if(!sk)return;
+  const catalog=SKILL_EXAMPLES[sk.id]||{};
+  const examples=catalog[n.type]||catalog.default||[];
+  const addition=examples.map(ex=>`\n// ${ex.title}\n// ${ex.cmd}`).join('');
+  n.prompt=(n.prompt||'')+'\n\n// Skills disponibles para '+sk.name+':'+addition;
+  glog('done',n.name,n.type,'⬡ Instrucciones de '+sk.name+' agregadas al prompt');
+  closeSkillAdapt();
+}
+function removeSkillFromNode(nodeId,idx){
+  const n=nodes.find(x=>x.id===nodeId);if(!n)return;
+  const sk=n.skills[idx];if(!sk)return;
+  const name=sk.name;
+  n.skills.splice(idx,1);
+  refreshNodeSkillRings(n);
+  glog('action',n.name,n.type,'⬡ Skill removida: '+name);
+  if(!n.skills.length){closeSkillAdapt();return;}
+  skillAdaptSkillIdx=Math.max(0,idx-1);
+  renderSkillAdaptTabs(n);
+  renderSkillAdaptBody(n,skillAdaptSkillIdx);
+  document.getElementById('skh-sub').textContent=n.skills.map(s=>s.name).join(' · ');
+}
+
+// ══════════════════════════════
 // MINIMAP
 // ══════════════════════════════
 function updateMM(){
@@ -1715,7 +2029,7 @@ function updateMM(){
 // ══════════════════════════════
 document.addEventListener('keydown',e=>{
   if((e.key==='Delete'||e.key==='Backspace')&&document.activeElement===document.body)delSel();
-  if(e.key==='Escape'){connMode=false;connFrom=null;document.getElementById('connbtn').classList.remove('act');document.getElementById('tc').style.display='none';closeM();closeExpand();closeAgentBuilder();}
+  if(e.key==='Escape'){connMode=false;connFrom=null;document.getElementById('connbtn').classList.remove('act');document.getElementById('tc').style.display='none';closeM();closeExpand();closeAgentBuilder();closeSkillAdapt();}
   if(e.key==='f'||e.key==='F')fitAll();
   if(e.key==='r'||e.key==='R')runAll();
 });
