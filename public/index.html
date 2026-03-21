@@ -1,0 +1,1758 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Pipeline OS v4</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;1,300&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#1c1816}
+body{font-family:'IBM Plex Mono',monospace;color:#ddd8cc}
+
+#bg{position:fixed;inset:0;z-index:0;pointer-events:none}
+#noise{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.055;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='f'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23f)'/%3E%3C/svg%3E");
+  background-size:200px 200px}
+
+/* ── TOOLBAR ── */
+#toolbar{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:300;
+  display:flex;align-items:center;gap:2px;background:rgba(24,20,18,.93);
+  border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:4px 6px;
+  backdrop-filter:blur(12px);box-shadow:0 4px 24px rgba(0,0,0,.5)}
+.tb{background:transparent;border:none;color:#8a8478;font-family:'IBM Plex Mono',monospace;
+  font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;
+  display:flex;align-items:center;gap:5px;letter-spacing:.04em;transition:.12s;white-space:nowrap}
+.tb:hover{background:rgba(255,255,255,.07);color:#ddd8cc}
+.tb.act{background:rgba(180,140,60,.15);color:#c8a040}
+.tb svg{width:11px;height:11px;flex-shrink:0}
+.tsep{width:1px;height:18px;background:rgba(255,255,255,.08);margin:0 2px}
+.tpipe{font-size:10px;color:#9a9088;padding:3px 10px;font-family:'IBM Plex Sans',sans-serif;
+  font-weight:500;background:transparent;border:none;cursor:pointer;border-radius:4px;
+  transition:.12s;display:flex;align-items:center;gap:5px}
+.tpipe:hover{background:rgba(255,255,255,.06);color:#ddd8cc}
+.trun{background:#c8a040;border:none;color:#1a1200;font-family:'IBM Plex Mono',monospace;
+  font-size:10px;font-weight:600;padding:4px 12px;border-radius:4px;cursor:pointer;transition:.12s}
+.trun:hover{background:#dab848}
+
+/* ── PIPELINE SIDEBAR ── */
+#pside{position:fixed;left:0;top:0;bottom:0;width:242px;z-index:400;background:rgba(10,8,8,.97);
+  border-right:1px solid rgba(255,255,255,.08);backdrop-filter:blur(16px);display:flex;flex-direction:column;
+  transform:translateX(-100%);transition:transform .2s cubic-bezier(.4,0,.2,1);box-shadow:4px 0 32px rgba(0,0,0,.7)}
+#pside.open{transform:translateX(0)}
+#pside-head{padding:13px 14px 11px;border-bottom:1px solid rgba(255,255,255,.06);
+  display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+#pside-head h2{font-family:'IBM Plex Sans',sans-serif;font-size:11px;font-weight:600;color:#9a9088;letter-spacing:.1em;text-transform:uppercase}
+.pside-cls{background:transparent;border:none;color:#3a3630;font-size:14px;cursor:pointer;padding:2px 5px;border-radius:2px}
+.pside-cls:hover{background:rgba(255,255,255,.06);color:#706860}
+#pside-body{flex:1;overflow-y:auto;padding:8px 0}
+#pside-body::-webkit-scrollbar{width:3px}
+#pside-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08)}
+.ps-sec{padding:6px 14px 3px}
+.ps-lbl{font-size:8px;color:#3a3630;letter-spacing:.1em;text-transform:uppercase;margin-bottom:5px}
+.ps-pipe{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:4px;cursor:pointer;transition:.12s;margin-bottom:2px;border:1px solid transparent}
+.ps-pipe:hover{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.06)}
+.ps-pipe.on{background:rgba(200,160,64,.07);border-color:rgba(200,160,64,.18)}
+.ps-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+.ps-info{flex:1;min-width:0}
+.ps-name{font-size:10px;color:#9a9088;font-family:'IBM Plex Sans',sans-serif;font-weight:500}
+.ps-pipe.on .ps-name{color:#c8a040}
+.ps-sub{font-size:8px;color:#3a3630;margin-top:1px}
+.ps-div{height:1px;background:rgba(255,255,255,.05);margin:8px 14px}
+.ps-new{display:flex;align-items:center;gap:7px;padding:6px 10px;border-radius:3px;cursor:pointer;
+  color:#3a3630;font-size:9px;transition:.12s;border:1px dashed rgba(255,255,255,.05);margin:2px 0}
+.ps-new:hover{background:rgba(255,255,255,.03);color:#706860;border-color:rgba(255,255,255,.1)}
+.ps-agent{display:flex;align-items:center;gap:7px;padding:5px 10px;border-radius:3px;cursor:grab;font-size:10px;color:#5a5248;transition:.12s;margin-bottom:1px}
+.ps-agent:hover{background:rgba(255,255,255,.04);color:#9a9088}
+.ps-adot{width:7px;height:7px;border-radius:2px;flex-shrink:0}
+#pback{position:fixed;inset:0;z-index:399;background:rgba(0,0,0,.3);display:none}
+
+/* ── CANVAS ── */
+#wrap{position:fixed;inset:0;z-index:10;overflow:hidden}
+#canvas{position:absolute;transform-origin:0 0;width:6000px;height:5000px}
+#svgl{position:absolute;top:0;left:0;width:6000px;height:5000px;pointer-events:none;z-index:1}
+
+/* ══════════════════════════════
+   NODE
+   ══════════════════════════════ */
+.node{position:absolute;width:230px;border-radius:5px;border:1px solid rgba(255,255,255,.07);
+  cursor:move;z-index:5;font-family:'IBM Plex Mono',monospace;overflow:visible;
+  box-shadow:0 2px 16px rgba(0,0,0,.5)}
+.node:hover{border-color:rgba(255,255,255,.16)}
+.node.sel{border-color:rgba(200,160,64,.6);box-shadow:0 0 0 1px rgba(200,160,64,.3),0 4px 32px rgba(0,0,0,.6)}
+.node.running{box-shadow:0 0 20px rgba(200,160,64,.15),0 2px 16px rgba(0,0,0,.5)}
+.node.awaiting-input{border-color:rgba(200,160,64,.5) !important;animation:awaitpulse 1.5s ease-in-out infinite}
+@keyframes awaitpulse{0%,100%{box-shadow:0 0 0 1px rgba(200,160,64,.3),0 4px 32px rgba(0,0,0,.6)}50%{box-shadow:0 0 0 2px rgba(200,160,64,.5),0 4px 40px rgba(200,160,64,.15)}}
+
+/* Skill frames — stacked rings around node */
+.skill-frame{position:absolute;border-radius:8px;border:1px solid rgba(74,122,191,.3);pointer-events:none;z-index:-1}
+.skill-frame-label{position:absolute;top:-8px;left:8px;font-size:7px;padding:0 5px;border-radius:2px;font-family:'IBM Plex Mono',monospace;letter-spacing:.06em}
+
+.node-inner{border-radius:5px;overflow:hidden;background:#0f0d0c}
+
+/* Header */
+.nh{padding:8px 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(0,0,0,.35)}
+.nh-left{display:flex;align-items:center;gap:7px}
+.nh-icon{font-size:11px;opacity:.7;width:14px}
+.nh-name{font-size:11px;font-weight:600;color:#fff;letter-spacing:.01em;font-family:'IBM Plex Sans',sans-serif}
+.nh-right{display:flex;align-items:center;gap:2px}
+.nc{width:18px;height:18px;border-radius:3px;border:none;background:rgba(0,0,0,.25);
+  color:rgba(255,255,255,.45);display:flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:8px;transition:.1s;line-height:1}
+.nc:hover{background:rgba(0,0,0,.5);color:#fff}
+
+/* IO Section — INPUT + OUTPUT on node */
+.nio{display:flex;border-bottom:1px solid rgba(255,255,255,.04)}
+.nio-half{flex:1;padding:5px 8px;position:relative}
+.nio-half+.nio-half{border-left:1px solid rgba(255,255,255,.04)}
+.nio-lbl{font-size:7px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px;opacity:.5}
+.nio-type{font-size:9px;display:flex;align-items:center;gap:4px;color:#706860}
+.nio-icon{font-size:10px;flex-shrink:0}
+.nio-default{font-size:8px;color:#3a3630;margin-top:2px;font-style:italic;line-height:1.3}
+.nio-expand{font-size:7px;color:#3a3630;cursor:pointer;margin-top:2px;letter-spacing:.06em;transition:.1s}
+.nio-expand:hover{color:#706860}
+
+/* Meta/Goal — clickable to expand */
+.nmeta{padding:5px 9px;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer;transition:.1s}
+.nmeta:hover{background:rgba(255,255,255,.02)}
+.nmeta-row{font-size:9px;color:#706860;line-height:1.4;letter-spacing:.01em;display:flex;align-items:flex-start;gap:4px}
+.nmeta-row b{color:#9a9088;font-weight:500;flex-shrink:0}
+.nmeta-row .nmeta-txt{overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}
+.nmeta-row .nmeta-txt.expanded{-webkit-line-clamp:unset}
+.nmeta-expand-hint{font-size:7px;color:#3a3630;letter-spacing:.06em;margin-top:1px}
+
+/* Subtasks */
+.nsubtasks{padding:4px 9px 4px;border-bottom:1px solid rgba(255,255,255,.04)}
+.nsub{font-size:9px;color:#706860;padding:1px 0}
+
+/* Visual output */
+.nvis{border-bottom:1px solid rgba(255,255,255,.04)}
+.nvis-img{width:100%;height:90px;object-fit:cover;display:block}
+.nvis-placeholder{height:70px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;background:#0a0808}
+.nvis-placeholder svg{opacity:.12}
+.nvis-placeholder span{font-size:8px;color:#2a2620;letter-spacing:.08em}
+.nvis-gen{height:70px;display:flex;align-items:center;justify-content:center;background:#0a0808;font-size:9px;color:#3a3630;letter-spacing:.08em;position:relative;overflow:hidden}
+.nvis-prompt{padding:6px 9px;background:#0a0808;min-height:48px}
+.nvis-prompt-lbl{font-size:7px;color:#3a3630;letter-spacing:.1em;margin-bottom:3px;text-transform:uppercase}
+.nvis-prompt-txt{font-size:9px;color:#706860;line-height:1.5;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.nvis-list{padding:4px 9px}
+.nvis-li{font-size:9px;color:#706860;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.03);display:flex;gap:4px}
+.nvis-li:last-child{border:none}
+.nvis-timeline{padding:5px 9px}
+.ntl-bar{height:9px;background:#0a0808;border-radius:2px;overflow:hidden;margin-bottom:2px}
+.ntl-fill{height:100%;border-radius:2px;transition:width .3s}
+.ntl-clips{display:flex;gap:2px;margin-top:2px}
+.ntl-clip{flex:1;height:14px;border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:7px;color:rgba(255,255,255,.2)}
+
+/* Action buttons */
+.nactions{display:flex;border-top:1px solid rgba(255,255,255,.04)}
+.nact{flex:1;padding:5px 7px;background:#0f0d0c;display:flex;align-items:center;gap:5px;
+  cursor:pointer;border:none;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#706860;
+  letter-spacing:.02em;border-right:1px solid rgba(255,255,255,.04);transition:.12s;text-align:left}
+.nact:last-child{border-right:none}
+.nact:hover{background:#141210;color:#9a9088}
+.nact-ico{width:16px;height:16px;border-radius:3px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:9px}
+.nstatus-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-left:auto}
+.nstatus-dot.idle{background:#1e1c1a;border:1.5px solid #2e2c28}
+.nstatus-dot.running{background:#c8a040;animation:sdpulse .8s infinite alternate}
+.nstatus-dot.done{background:#3a8a3a}
+.nstatus-dot.error{background:#8a2a2a}
+.nstatus-dot.paused{background:#2a3a6a}
+@keyframes sdpulse{from{opacity:1}to{opacity:.3}}
+
+/* Footer */
+.nfoot{padding:3px 9px;background:rgba(0,0,0,.2);border-top:1px solid rgba(0,0,0,.3);
+  display:flex;align-items:center;justify-content:space-between}
+.nfoot-st{font-size:8px;color:#3a3630;letter-spacing:.06em}
+.nfoot-cfg{background:transparent;border:none;font-size:8px;color:#3a3630;
+  cursor:pointer;font-family:'IBM Plex Mono',monospace;letter-spacing:.04em;padding:1px 4px;border-radius:2px}
+.nfoot-cfg:hover{background:rgba(255,255,255,.05);color:#706860}
+
+/* Scanline */
+.scanline{position:absolute;left:0;right:0;height:1px;background:rgba(200,160,64,.3);
+  animation:scan 1s linear infinite;pointer-events:none;z-index:20;display:none}
+@keyframes scan{0%{top:0}100%{top:100%}}
+.node.running .scanline{display:block}
+
+/* Human approve */
+.happrove{padding:7px 9px;background:rgba(200,160,64,.05);border-bottom:1px solid rgba(200,160,64,.1)}
+.happrove-lbl{font-size:8px;color:#c8a040;letter-spacing:.07em;margin-bottom:5px;text-transform:uppercase}
+.happrove-btns{display:flex;gap:4px}
+.hbtn{flex:1;padding:4px 4px;border-radius:3px;border:1px solid rgba(255,255,255,.06);
+  background:transparent;font-family:'IBM Plex Mono',monospace;font-size:9px;cursor:pointer;transition:.12s}
+.hbtn.yes{color:#3a8a3a;border-color:rgba(58,138,58,.2)}.hbtn.yes:hover{background:rgba(58,138,58,.1)}
+.hbtn.no{color:#8a3a3a;border-color:rgba(138,42,42,.2)}.hbtn.no:hover{background:rgba(138,42,42,.1)}
+.hbtn.edit{color:#706860}.hbtn.edit:hover{background:rgba(255,255,255,.05)}
+
+/* PORTS */
+.port{position:absolute;width:10px;height:10px;border-radius:50%;border:1.5px solid rgba(255,255,255,.15);
+  background:#1c1816;cursor:crosshair;z-index:20;transition:.12s}
+.port:hover{border-color:#c8a040;background:#c8a040;transform:scale(1.4)}
+.port.in{left:-5px;top:50%;transform:translateY(-50%)}
+.port.in:hover{transform:translateY(-50%) scale(1.4)}
+.port.out{right:-5px;top:50%;transform:translateY(-50%)}
+.port.out:hover{transform:translateY(-50%) scale(1.4)}
+.port.out-y{right:-5px;top:32%;transform:translateY(-50%)}
+.port.out-y:hover{transform:translateY(-50%) scale(1.4);border-color:#3a8a3a;background:#3a8a3a}
+.port.out-n{right:-5px;top:68%;transform:translateY(-50%)}
+.port.out-n:hover{transform:translateY(-50%) scale(1.4);border-color:#8a3a3a;background:#8a3a3a}
+.plbl{position:absolute;right:14px;font-size:7px;color:#3a3630;pointer-events:none;letter-spacing:.06em}
+.plbl.y{top:28%;transform:translateY(-50%)}
+.plbl.n{top:64%;transform:translateY(-50%)}
+
+/* ══════════════════════════════
+   OUTPUT CARD (dropped by agent)
+   ══════════════════════════════ */
+.output-card{
+  position:absolute;width:200px;z-index:6;
+  border-radius:5px;border:1px solid rgba(255,255,255,.1);
+  background:#0e0c0a;box-shadow:0 4px 24px rgba(0,0,0,.6);
+  font-family:'IBM Plex Mono',monospace;cursor:move;
+  transition:border-color .15s,box-shadow .15s;
+  overflow:hidden;
+}
+.output-card:hover{border-color:rgba(255,255,255,.2);box-shadow:0 6px 32px rgba(0,0,0,.7)}
+.output-card.connectable{border-color:rgba(200,160,64,.4);box-shadow:0 0 0 1px rgba(200,160,64,.2),0 4px 24px rgba(0,0,0,.6)}
+.oc-header{padding:6px 9px;border-bottom:1px solid rgba(255,255,255,.06);
+  display:flex;align-items:center;justify-content:space-between;
+  background:rgba(0,0,0,.3)}
+.oc-from{font-size:8px;color:#3a3630;letter-spacing:.06em;display:flex;align-items:center;gap:5px}
+.oc-from-dot{width:5px;height:5px;border-radius:50%}
+.oc-type{font-size:8px;padding:1px 6px;border-radius:2px;letter-spacing:.04em}
+.oc-type.text{background:rgba(200,160,64,.1);color:#c8a040}
+.oc-type.image{background:rgba(138,90,191,.1);color:#8a5abf}
+.oc-type.video{background:rgba(74,122,191,.1);color:#4a7abf}
+.oc-type.json{background:rgba(58,138,58,.1);color:#3a8a3a}
+.oc-type.file{background:rgba(200,120,64,.1);color:#c87840}
+.oc-body{padding:8px 9px;max-height:100px;overflow:hidden;position:relative;cursor:pointer}
+.oc-body:hover .oc-expand-hint{opacity:1}
+.oc-preview-txt{font-size:9px;color:#706860;line-height:1.5;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.oc-preview-img{width:100%;height:70px;object-fit:cover;border-radius:2px;display:block}
+.oc-preview-json{font-size:8px;color:#3a8a3a;line-height:1.4;white-space:pre;overflow:hidden;max-height:60px}
+.oc-expand-hint{position:absolute;bottom:4px;right:6px;font-size:7px;color:#c8a040;opacity:0;transition:.15s;background:#0e0c0a;padding:1px 4px;border-radius:2px}
+.oc-footer{padding:4px 9px;border-top:1px solid rgba(255,255,255,.05);
+  display:flex;align-items:center;justify-content:space-between;background:rgba(0,0,0,.2)}
+.oc-size{font-size:8px;color:#3a3630;letter-spacing:.04em}
+.oc-connect-port{width:9px;height:9px;border-radius:50%;border:1.5px solid rgba(255,255,255,.15);
+  background:#1c1816;cursor:crosshair;transition:.12s;flex-shrink:0}
+.oc-connect-port:hover{border-color:#c8a040;background:#c8a040}
+.oc-actions{display:flex;gap:4px}
+.oc-btn{background:transparent;border:none;color:#3a3630;font-size:10px;cursor:pointer;padding:1px 3px;border-radius:2px;transition:.1s}
+.oc-btn:hover{background:rgba(255,255,255,.06);color:#706860}
+
+/* Drag ghost for output cards */
+.oc-dragging{opacity:.7;transform:rotate(2deg)}
+
+/* CONNECTIONS */
+.cpath{fill:none;stroke:#3a3830;stroke-width:1.5;stroke-dasharray:5 4}
+.cpath.active{stroke:#c8a040;stroke-dasharray:none;animation:flow 1.1s linear infinite}
+.cpath.cy{stroke:#2a5a2a;stroke-dasharray:4 3}
+.cpath.cn{stroke:#5a2a2a;stroke-dasharray:4 3}
+.cpath.card-conn{stroke:#c8a04055;stroke-dasharray:3 3;stroke-width:1}
+.cpath.card-conn.active{stroke:#c8a040;stroke-dasharray:none;animation:flow 1.4s linear infinite}
+@keyframes flow{to{stroke-dashoffset:-18}}
+#tc{fill:none;stroke:#c8a040;stroke-width:1.5;stroke-dasharray:5 3;display:none}
+
+/* ══════════════════════════════
+   LOG TERMINAL
+   ══════════════════════════════ */
+#logwin{position:fixed;bottom:12px;right:166px;width:340px;z-index:95;border-radius:6px;
+  border:1px solid rgba(255,255,255,.1);background:rgba(10,8,8,.96);
+  box-shadow:0 8px 40px rgba(0,0,0,.7);display:flex;flex-direction:column;
+  overflow:hidden;backdrop-filter:blur(10px);transition:height .18s ease,border-color .3s;
+  min-width:240px;min-height:28px}
+#logwin.minimized{height:28px!important}
+#logwin.minimized #logbody,#logwin.minimized #logfilters,#logwin.minimized #log-inputrow,#logwin.minimized #logresize{display:none}
+/* OPERATOR WARNING STATE */
+#logwin.operator-waiting{
+  border-color:rgba(200,160,64,.6) !important;
+  animation:logwarnborder 1.5s ease-in-out infinite;
+}
+@keyframes logwarnborder{0%,100%{border-color:rgba(200,160,64,.4)}50%{border-color:rgba(200,160,64,.9);box-shadow:0 0 20px rgba(200,160,64,.2)}}
+
+/* Hazard stripe on log title bar when operator waiting */
+#logtbar{height:28px;background:rgba(18,14,12,.98);border-bottom:1px solid rgba(255,255,255,.07);
+  display:flex;align-items:center;cursor:move;flex-shrink:0;user-select:none;position:relative;overflow:hidden}
+#logtbar.hazard::after{
+  content:'';position:absolute;inset:0;
+  background:repeating-linear-gradient(-45deg,rgba(200,160,64,.12) 0px,rgba(200,160,64,.12) 6px,rgba(0,0,0,.0) 6px,rgba(0,0,0,0) 12px);
+  animation:hstripe 1.5s linear infinite;pointer-events:none;
+}
+@keyframes hstripe{from{background-position:0 0}to{background-position:24px 0}}
+.ltb-dots{display:flex;align-items:center;gap:4px;padding:0 10px}
+.ltb-dot{width:9px;height:9px;border-radius:50%;cursor:pointer;border:1px solid rgba(0,0,0,.3);transition:.1s;flex-shrink:0}
+.ltb-dot:hover{filter:brightness(1.3)}
+.ltb-dot.close{background:#c85050}.ltb-dot.min{background:#c8a040}.ltb-dot.max{background:#3a8a3a}
+.ltb-title{flex:1;font-size:9px;color:#5a5248;letter-spacing:.1em;text-transform:uppercase;font-family:'IBM Plex Mono',monospace}
+.ltb-badge{font-size:8px;padding:1px 6px;border-radius:2px;margin-right:10px;
+  background:rgba(200,160,64,.12);color:#c8a040;letter-spacing:.06em;font-family:'IBM Plex Mono',monospace}
+.ltb-badge.active{animation:badgepulse 1s infinite alternate}
+.ltb-badge.operator{background:rgba(200,160,64,.25) !important;color:#e0c050 !important;animation:badgepulse .5s infinite alternate}
+@keyframes badgepulse{from{opacity:1}to{opacity:.4}}
+#logfilters{display:flex;align-items:center;border-bottom:1px solid rgba(255,255,255,.05);
+  background:rgba(14,10,10,.9);flex-shrink:0}
+.lf{font-size:8px;letter-spacing:.07em;padding:4px 10px;color:#3a3630;cursor:pointer;
+  border-bottom:1.5px solid transparent;transition:.12s;text-transform:uppercase;font-family:'IBM Plex Mono',monospace}
+.lf:hover{color:#706860}.lf.on{color:#c8a040;border-bottom-color:#c8a040}
+.lf-sep{width:1px;height:12px;background:rgba(255,255,255,.05)}
+.lf-clear{margin-left:auto;font-size:8px;color:#3a3630;padding:0 9px;cursor:pointer;transition:.1s}
+.lf-clear:hover{color:#706860}
+#logbody{flex:1;overflow-y:auto;overflow-x:hidden;padding:5px 0;font-family:'IBM Plex Mono',monospace;min-height:0}
+#logbody::-webkit-scrollbar{width:3px}
+#logbody::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:2px}
+.log-entry{display:flex;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.025);align-items:flex-start;font-size:9px;line-height:1.5}
+.log-entry:last-child{border:none}
+.le-time{flex-shrink:0;width:54px;padding:0 6px;color:#3a3630;font-size:8px;padding-top:1px}
+.le-agent{flex-shrink:0;width:78px;overflow:hidden;font-size:8px;padding-top:1px;white-space:nowrap;text-overflow:ellipsis;padding-right:6px}
+.le-msg{flex:1;color:#706860;padding-right:8px;word-break:break-word}
+.log-entry.think .le-msg{color:#8a7860;font-style:italic}.log-entry.think .le-msg::before{content:'💭 '}
+.log-entry.action .le-msg{color:#6a8a6a}.log-entry.action .le-msg::before{content:'→ '}
+.log-entry.done .le-msg{color:#3a8a3a}.log-entry.done .le-msg::before{content:'✓ '}
+.log-entry.error .le-msg{color:#8a3a3a}.log-entry.error .le-msg::before{content:'✕ '}
+.log-entry.warn .le-msg{color:#c8a040}.log-entry.warn .le-msg::before{content:'⚠ '}
+.log-entry.system .le-msg{color:#4a4870}.log-entry.system .le-msg::before{content:'⬡ '}
+.log-entry.decision .le-msg{color:#c8a040;font-weight:500}.log-entry.decision .le-msg::before{content:'◈ '}
+.log-entry.operator .le-msg{color:#e0c050;font-weight:500;font-style:italic}.log-entry.operator .le-msg::before{content:'⚠ OPERADOR: '}
+.log-entry.think.typing .le-msg::after{content:'▌';animation:blink .6s infinite;color:#c8a040}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+#logresize{height:4px;background:transparent;cursor:ns-resize;flex-shrink:0;border-top:1px solid rgba(255,255,255,.04)}
+#logresize:hover{background:rgba(200,160,64,.1)}
+#log-inputrow{display:flex;align-items:center;border-top:1px solid rgba(255,255,255,.06);background:rgba(10,8,6,.98);flex-shrink:0;position:relative}
+#log-cmd-prompt{font-size:9px;color:#3a3630;padding:0 8px;flex-shrink:0;font-family:'IBM Plex Mono',monospace}
+#log-cmd{flex:1;background:transparent;border:none;color:#ddd8cc;font-family:'IBM Plex Mono',monospace;font-size:10px;padding:7px 4px;outline:none}
+#log-cmd::placeholder{color:#2a2620}
+#log-cmd-send{background:transparent;border:none;color:#3a3630;font-size:12px;padding:5px 10px;cursor:pointer;transition:.1s}
+#log-cmd-send:hover{color:#c8a040}
+#cmd-hints{position:absolute;bottom:100%;left:0;right:0;background:rgba(12,10,8,.98);border:1px solid rgba(255,255,255,.08);border-radius:4px 4px 0 0;z-index:200}
+
+/* ══════════════════════════════
+   AGENT BUILDER WINDOW
+   ══════════════════════════════ */
+#agentwin{position:fixed;bottom:12px;left:12px;width:420px;height:520px;z-index:96;
+  border-radius:7px;border:1px solid rgba(200,160,64,.25);background:rgba(8,7,6,.97);
+  box-shadow:0 12px 60px rgba(0,0,0,.8),0 0 0 1px rgba(200,160,64,.08);
+  display:none;flex-direction:column;overflow:hidden;backdrop-filter:blur(14px);
+  min-width:300px;min-height:200px;font-family:'IBM Plex Mono',monospace}
+#agentwin.open{display:flex}
+#agentwin.minimized #awin-body,#agentwin.minimized #awin-resize{display:none}
+#agentwin.minimized{height:28px!important}
+#awin-bar{height:28px;background:rgba(16,12,10,.99);border-bottom:1px solid rgba(200,160,64,.12);
+  display:flex;align-items:center;cursor:move;flex-shrink:0;user-select:none}
+.awin-dots{display:flex;align-items:center;gap:4px;padding:0 10px}
+.awin-title{flex:1;font-size:9px;color:#c8a040;letter-spacing:.12em;text-transform:uppercase}
+.awin-badge{font-size:8px;padding:1px 7px;border-radius:2px;margin-right:8px;background:rgba(200,160,64,.1);color:#c8a040;letter-spacing:.06em}
+#awin-preview{flex-shrink:0;border-bottom:1px solid rgba(255,255,255,.05);background:rgba(12,10,8,.9);padding:7px 12px;display:flex;align-items:center;gap:10px}
+.awp-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+.awp-name{font-size:10px;color:#9a9088;font-family:'IBM Plex Sans',sans-serif;font-weight:500;flex:1}
+.awp-chips{display:flex;gap:4px;flex-wrap:wrap}
+.awp-chip{font-size:8px;padding:1px 6px;border-radius:2px;background:rgba(255,255,255,.05);color:#4a4840;letter-spacing:.04em}
+.awp-chip.ok{background:rgba(58,138,58,.1);color:#3a7a3a}
+#awin-body{flex:1;display:flex;flex-direction:column;min-height:0}
+#awin-msgs{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+#awin-msgs::-webkit-scrollbar{width:3px}
+#awin-msgs::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08)}
+.amsg{max-width:88%;display:flex;flex-direction:column;gap:3px}
+.amsg.ai{align-self:flex-start}.amsg.user{align-self:flex-end}
+.amsg-bubble{padding:7px 10px;border-radius:5px;font-size:10px;line-height:1.55;word-break:break-word}
+.amsg.ai .amsg-bubble{background:rgba(24,20,16,.9);border:1px solid rgba(255,255,255,.07);color:#b0aa9a;border-radius:2px 5px 5px 5px}
+.amsg.user .amsg-bubble{background:rgba(200,160,64,.1);border:1px solid rgba(200,160,64,.2);color:#ddd8cc;border-radius:5px 2px 5px 5px}
+.amsg-label{font-size:8px;color:#3a3630;letter-spacing:.06em;padding:0 2px}
+.amsg.user .amsg-label{text-align:right;color:#5a5040}
+.amsg-card{background:rgba(16,12,10,.95);border:1px solid rgba(200,160,64,.18);border-radius:4px;padding:10px 12px;margin-top:4px;font-size:9px;color:#706860}
+.amsg-card-title{font-size:10px;color:#c8a040;font-weight:500;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.amsg-card-row{display:flex;gap:6px;margin-bottom:3px;align-items:flex-start}
+.amsg-card-key{color:#3a3630;width:80px;flex-shrink:0;letter-spacing:.04em}
+.amsg-card-val{color:#9a9088;flex:1}
+.amsg-card-divider{height:1px;background:rgba(255,255,255,.05);margin:5px 0}
+.amsg-card-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+.amsg-card-tag{font-size:8px;padding:1px 6px;border-radius:2px;background:rgba(200,160,64,.08);color:#c8a040;letter-spacing:.04em}
+.typing-dots{display:flex;gap:3px;padding:8px 10px;align-items:center}
+.typing-dots span{width:4px;height:4px;border-radius:50%;background:#c8a040;animation:tdot .9s infinite}
+.typing-dots span:nth-child(2){animation-delay:.15s}.typing-dots span:nth-child(3){animation-delay:.3s}
+@keyframes tdot{0%,60%,100%{opacity:.2;transform:scale(.8)}30%{opacity:1;transform:scale(1.2)}}
+#awin-chips{padding:5px 10px;border-top:1px solid rgba(255,255,255,.04);display:flex;gap:5px;flex-wrap:wrap;background:rgba(10,8,6,.9);flex-shrink:0}
+.aqchip{font-size:9px;padding:3px 9px;border-radius:3px;cursor:pointer;border:1px solid rgba(255,255,255,.08);color:#706860;background:transparent;font-family:'IBM Plex Mono',monospace;letter-spacing:.03em;transition:.12s}
+.aqchip:hover{background:rgba(255,255,255,.05);color:#9a9088;border-color:rgba(255,255,255,.14)}
+.aqchip.gold{border-color:rgba(200,160,64,.25);color:#c8a040}.aqchip.gold:hover{background:rgba(200,160,64,.08)}
+#awin-input-row{display:flex;align-items:flex-end;border-top:1px solid rgba(255,255,255,.06);background:rgba(12,10,8,.98);flex-shrink:0}
+#awin-input{flex:1;background:transparent;border:none;color:#ddd8cc;font-family:'IBM Plex Mono',monospace;font-size:10px;padding:9px 12px;resize:none;outline:none;line-height:1.5;max-height:80px;overflow-y:auto}
+#awin-input::placeholder{color:#2a2620}
+#awin-send{background:transparent;border:none;color:#c8a040;font-size:14px;padding:8px 12px;cursor:pointer;transition:.12s;flex-shrink:0;align-self:flex-end;margin-bottom:2px}
+#awin-send:hover{color:#e0c050}
+#awin-savebar{padding:8px 12px;border-top:1px solid rgba(255,255,255,.06);background:rgba(10,8,6,.98);display:none;align-items:center;gap:8px;flex-shrink:0}
+#awin-savebar.show{display:flex}
+.awin-save-btn{flex:1;background:#c8a040;border:none;color:#1a1200;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;padding:6px 12px;border-radius:3px;cursor:pointer;transition:.12s}
+.awin-save-btn:hover{background:#dab848}
+.awin-discard-btn{background:transparent;border:1px solid rgba(255,255,255,.08);color:#706860;font-family:'IBM Plex Mono',monospace;font-size:10px;padding:6px 10px;border-radius:3px;cursor:pointer;transition:.12s}
+#awin-resize{height:4px;background:transparent;cursor:ns-resize;flex-shrink:0;border-top:1px solid rgba(255,255,255,.04)}
+
+/* ── EXPAND MODAL ── */
+#expandwin{position:fixed;inset:0;z-index:600;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;backdrop-filter:blur(8px)}
+#expandwin.open{display:flex}
+#expandbox{width:640px;max-height:80vh;background:#161210;border:1px solid rgba(255,255,255,.12);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 32px 80px rgba(0,0,0,.8)}
+.exhd{padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:10px}
+.exhd-title{font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:600;flex:1;color:#ddd8cc}
+.excls{background:transparent;border:none;color:#3a3630;font-size:15px;cursor:pointer;padding:2px 5px;border-radius:2px}
+.excls:hover{background:rgba(255,255,255,.06);color:#706860}
+#expandcontent{flex:1;overflow-y:auto;padding:16px}
+#expandcontent::-webkit-scrollbar{width:3px}
+#expandcontent::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08)}
+.ex-textarea{width:100%;background:#0a0808;border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:10px;color:#ddd8cc;font-family:'IBM Plex Mono',monospace;font-size:11px;resize:vertical;outline:none;line-height:1.6;min-height:200px}
+.ex-textarea:focus{border-color:rgba(200,160,64,.4)}
+.ex-savebar{padding:10px 16px;border-top:1px solid rgba(255,255,255,.07);display:flex;gap:8px;justify-content:flex-end}
+.ex-save{background:#c8a040;border:none;color:#1a1200;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;padding:5px 14px;border-radius:3px;cursor:pointer}
+.ex-cancel{background:transparent;border:1px solid rgba(255,255,255,.08);color:#706860;font-family:'IBM Plex Mono',monospace;font-size:10px;padding:5px 10px;border-radius:3px;cursor:pointer}
+
+/* MODAL */
+#moverlay{position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:500;display:none;align-items:center;justify-content:center;backdrop-filter:blur(8px)}
+#moverlay.open{display:flex}
+#modal{width:580px;max-height:80vh;background:#161210;border:1px solid rgba(255,255,255,.1);border-radius:7px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 32px 80px rgba(0,0,0,.8)}
+.mhd{padding:11px 15px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:9px}
+.mhd-dot{width:8px;height:8px;border-radius:2px}
+.mhd-title{font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:600;flex:1;color:#ddd8cc}
+.mcls{background:transparent;border:none;color:#3a3630;font-size:14px;cursor:pointer;padding:2px 5px;border-radius:2px}
+.mcls:hover{background:rgba(255,255,255,.06);color:#706860}
+.mtabs{display:flex;border-bottom:1px solid rgba(255,255,255,.06)}
+.mtab{padding:7px 13px;font-size:9px;font-weight:600;letter-spacing:.08em;color:#3a3630;cursor:pointer;border-bottom:2px solid transparent;transition:.12s;text-transform:uppercase}
+.mtab.on{color:#c8a040;border-bottom-color:#c8a040}
+.mtab:hover:not(.on){color:#706860}
+.mbody{flex:1;overflow-y:auto;padding:13px 15px}
+.mbody::-webkit-scrollbar{width:3px}
+.mbody::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08)}
+.fg{margin-bottom:11px}
+.fl{font-size:8px;letter-spacing:.1em;color:#3a3630;margin-bottom:4px;text-transform:uppercase}
+.fi{width:100%;background:#0a0808;border:1px solid rgba(255,255,255,.07);border-radius:3px;padding:6px 8px;color:#ddd8cc;font-family:'IBM Plex Mono',monospace;font-size:10px;resize:vertical;outline:none;transition:border-color .12s;line-height:1.5}
+.fi:focus{border-color:rgba(200,160,64,.4)}
+textarea.fi{min-height:65px}
+.frow{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.logl{font-size:9px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.03);display:flex;gap:8px;line-height:1.4}
+.lt{color:#3a3630;flex-shrink:0;font-size:8px}
+.lm{color:#706860}.lm.ok{color:#3a8a3a}.lm.er{color:#8a3a3a}.lm.wn{color:#c8a040}
+.tcbox{background:#0a0808;border:1px solid rgba(255,255,255,.06);border-radius:3px;padding:8px;margin-bottom:6px}
+.tcrow{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.tcn{font-size:10px;flex:1;color:#ddd8cc}
+.tcs{font-size:8px;padding:1px 6px;border-radius:2px;letter-spacing:.04em}
+.tcs.pass{background:rgba(58,138,58,.12);color:#3a8a3a}
+.tcs.fail{background:rgba(138,42,42,.12);color:#8a3a3a}
+.tcs.pend{background:rgba(60,56,50,.2);color:#706860}
+.runtc{background:rgba(200,160,64,.12);border:none;color:#c8a040;font-family:'IBM Plex Mono',monospace;font-size:8px;font-weight:600;padding:2px 7px;border-radius:2px;cursor:pointer}
+.runtc:hover{background:rgba(200,160,64,.22)}
+.add-btn{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);color:#706860;font-size:9px;padding:4px 9px;border-radius:3px;cursor:pointer;font-family:'IBM Plex Mono',monospace;margin-top:4px}
+
+/* IO type selector in modal */
+.io-type-row{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+.io-type-btn{padding:3px 9px;border-radius:3px;border:1px solid rgba(255,255,255,.08);background:transparent;color:#706860;font-family:'IBM Plex Mono',monospace;font-size:9px;cursor:pointer;transition:.12s}
+.io-type-btn:hover{background:rgba(255,255,255,.05);color:#9a9088}
+.io-type-btn.on{background:rgba(200,160,64,.1);border-color:rgba(200,160,64,.3);color:#c8a040}
+
+/* MINIMAP + ZOOM */
+#mm{position:fixed;right:12px;bottom:12px;width:140px;height:85px;background:rgba(12,10,9,.92);border:1px solid rgba(255,255,255,.07);border-radius:4px;z-index:90;overflow:hidden}
+#mmc{width:100%;height:100%}
+#zc{position:fixed;right:164px;bottom:12px;background:rgba(12,10,9,.92);border:1px solid rgba(255,255,255,.07);border-radius:4px;padding:3px 7px;z-index:90;display:flex;align-items:center;gap:4px}
+.zb{background:transparent;border:none;color:#706860;font-size:13px;cursor:pointer;line-height:1;padding:0 3px;transition:.1s}
+.zb:hover{color:#ddd8cc}
+#zl{font-size:9px;color:#706860;min-width:26px;text-align:center;letter-spacing:.04em}
+#ctx{position:fixed;z-index:600;background:#161210;border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:3px;min-width:140px;box-shadow:0 8px 32px rgba(0,0,0,.7);display:none}
+.ci{padding:5px 9px;font-size:10px;color:#706860;border-radius:2px;cursor:pointer;display:flex;align-items:center;gap:6px;letter-spacing:.03em}
+.ci:hover{background:rgba(255,255,255,.05);color:#ddd8cc}
+.ci.red{color:#8a3a3a}.ci.red:hover{background:rgba(138,42,42,.08)}
+.csep{height:1px;background:rgba(255,255,255,.05);margin:2px 0}
+
+/* SKILL FRAMES */
+.skill-ring{position:absolute;border-radius:8px;pointer-events:none}
+.skill-tag{position:absolute;top:-8px;font-size:7px;padding:0 5px;border-radius:2px;font-family:'IBM Plex Mono',monospace;letter-spacing:.06em;background:#0a0808}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div id="noise"></div>
+
+<!-- SIDEBAR -->
+<div id="pback" onclick="closeSide()"></div>
+<div id="pside">
+  <div id="pside-head"><h2>Pipelines</h2><button class="pside-cls" onclick="closeSide()">✕</button></div>
+  <div id="pside-body">
+    <div class="ps-sec">
+      <div class="ps-lbl">Activos</div>
+      <div class="ps-pipe on" onclick="closeSide()"><div class="ps-dot" style="background:#c85050"></div><div class="ps-info"><div class="ps-name">Video Pipeline v1</div><div class="ps-sub">7 agentes · 5 conexiones</div></div></div>
+      <div class="ps-pipe" onclick="closeSide()"><div class="ps-dot" style="background:#4a8abf"></div><div class="ps-info"><div class="ps-name">Blog Pipeline v1</div><div class="ps-sub">4 agentes · 3 conexiones</div></div></div>
+    </div>
+    <div class="ps-div"></div>
+    <div class="ps-sec">
+      <div class="ps-new" onclick="newPipeline()">+ Nuevo pipeline</div>
+      <div class="ps-new" onclick="openAgentBuilder()" style="color:#c8a040;border-color:rgba(200,160,64,.15);margin-top:3px">✦ Nuevo agente con IA</div>
+      <div class="ps-new" onclick="openSkillBuilder()" style="color:#6090c0;border-color:rgba(74,122,191,.15);margin-top:3px">⬡ Nueva skill con IA</div>
+    </div>
+    <div class="ps-div"></div>
+    <div class="ps-sec">
+      <div class="ps-lbl">Skills</div>
+      <div id="custom-skills-list"></div>
+    </div>
+    <div class="ps-div"></div>
+    <div class="ps-sec">
+      <div class="ps-lbl">Agentes personalizados</div>
+      <div id="custom-agents-list"></div>
+    </div>
+    <div class="ps-div"></div>
+    <div class="ps-sec">
+      <div class="ps-lbl">Tipos de agente</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'pilot')"><div class="ps-adot" style="background:#8a2222"></div>Piloto</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'research')"><div class="ps-adot" style="background:#1a4a2a"></div>Investigación</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'prompt')"><div class="ps-adot" style="background:#6a4215"></div>Prompt</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'image')"><div class="ps-adot" style="background:#2a1060"></div>Imagen</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'video')"><div class="ps-adot" style="background:#0e1e4a"></div>Video</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'assembly')"><div class="ps-adot" style="background:#3a1a08"></div>Ensamblaje</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'human')"><div class="ps-adot" style="background:#c8a040"></div>Operador</div>
+    </div>
+  </div>
+</div>
+
+<!-- TOOLBAR -->
+<div id="toolbar">
+  <button class="tpipe" onclick="openSide()">
+    <svg viewBox="0 0 10 8" width="10" height="8"><line x1="0" y1="1" x2="10" y2="1" stroke="currentColor" stroke-width="1.2"/><line x1="0" y1="4" x2="10" y2="4" stroke="currentColor" stroke-width="1.2"/><line x1="0" y1="7" x2="10" y2="7" stroke="currentColor" stroke-width="1.2"/></svg>
+    <span id="pipe-label">Video Pipeline v1</span> <span style="opacity:.4;font-size:8px">▾</span>
+  </button>
+  <div class="tsep"></div>
+  <button class="tb" onclick="addNodeCenter('pilot')">+ Nodo</button>
+  <button class="tb" id="connbtn" onclick="toggleConn()">⟶ Conectar</button>
+  <button class="tb" onclick="delSel()">✕ Borrar</button>
+  <div class="tsep"></div>
+  <button class="tb" onclick="runAll()">▶ Run</button>
+  <button class="tb" onclick="stopAll()">■ Stop</button>
+  <button class="tb" onclick="resetAll()">↺ Reset</button>
+  <div class="tsep"></div>
+  <button class="tb" onclick="fitAll()">⊞ Fit</button>
+  <div class="tsep"></div>
+  <button class="trun" onclick="runAll()">▶ EJECUTAR</button>
+</div>
+
+<!-- CANVAS -->
+<div id="wrap" ondragover="event.preventDefault()" ondrop="drop(event)"
+  onmousedown="wmd(event)" onmousemove="wmm(event)" onmouseup="wmu(event)"
+  onwheel="ww(event)" oncontextmenu="sctx(event)">
+  <div id="canvas">
+    <svg id="svgl">
+      <defs>
+        <marker id="ma" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3z" fill="#3a3830"/></marker>
+        <marker id="ma-a" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3z" fill="#c8a040"/></marker>
+        <marker id="ma-y" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3z" fill="#2a5a2a"/></marker>
+        <marker id="ma-n" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3z" fill="#5a2a2a"/></marker>
+        <marker id="ma-card" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><path d="M0,0 L0,5 L5,2.5z" fill="#c8a04066"/></marker>
+      </defs>
+      <path id="tc" d=""/>
+    </svg>
+  </div>
+</div>
+
+<!-- BOTTOM CONTROLS -->
+<div id="zc"><button class="zb" onclick="dz(-.1)">−</button><span id="zl">100%</span><button class="zb" onclick="dz(.1)">+</button></div>
+<div id="mm"><canvas id="mmc" width="140" height="85"></canvas></div>
+<div id="ctx"></div>
+
+<!-- LOG TERMINAL -->
+<div id="logwin" style="height:220px">
+  <div id="logtbar">
+    <div class="ltb-dots">
+      <div class="ltb-dot close" onclick="document.getElementById('logwin').style.display='none'" title="Cerrar"></div>
+      <div class="ltb-dot min" onclick="toggleLogMin()" title="Minimizar"></div>
+      <div class="ltb-dot max" onclick="toggleLogMax()" title="Maximizar"></div>
+    </div>
+    <span class="ltb-title" id="logtitle">Log Global — Pipeline</span>
+    <span class="ltb-badge" id="log-badge">IDLE</span>
+  </div>
+  <div id="logfilters">
+    <div class="lf on" onclick="setLogFilter('all',this)">Todo</div>
+    <div class="lf-sep"></div>
+    <div class="lf" onclick="setLogFilter('think',this)">Pensamiento</div>
+    <div class="lf-sep"></div>
+    <div class="lf" onclick="setLogFilter('action',this)">Acciones</div>
+    <div class="lf-sep"></div>
+    <div class="lf" onclick="setLogFilter('system',this)">Sistema</div>
+    <div class="lf-clear" onclick="clearLog()">✕ limpiar</div>
+  </div>
+  <div id="logbody"></div>
+  <div id="log-inputrow">
+    <span id="log-cmd-prompt">›</span>
+    <input id="log-cmd" placeholder="/skill /agente /pipeline /help..." />
+    <button id="log-cmd-send" onclick="parseLogCommand()">↵</button>
+    <div id="cmd-hints"></div>
+  </div>
+  <div id="logresize"></div>
+</div>
+
+<!-- AGENT BUILDER WINDOW -->
+<div id="agentwin">
+  <div id="awin-bar">
+    <div class="awin-dots">
+      <div class="ltb-dot close" onclick="closeAgentBuilder()"></div>
+      <div class="ltb-dot min" onclick="toggleAwinMin()"></div>
+      <div class="ltb-dot max" onclick="toggleAwinMax()"></div>
+    </div>
+    <span class="awin-title">Constructor de Agente — IA</span>
+    <span class="awin-badge" id="awin-badge">AGENTE</span>
+  </div>
+  <div id="awin-preview">
+    <div class="awp-dot" id="awp-dot" style="background:#3a3630"></div>
+    <span class="awp-name" id="awp-name">Nuevo...</span>
+    <div class="awp-chips" id="awp-chips">
+      <span class="awp-chip">prompt —</span><span class="awp-chip">tests —</span><span class="awp-chip">skills —</span>
+    </div>
+  </div>
+  <div id="awin-body">
+    <div id="awin-msgs"></div>
+    <div id="awin-chips"></div>
+    <div id="awin-input-row">
+      <textarea id="awin-input" rows="1" placeholder="Describe tu agente o responde..."
+        onkeydown="awinKey(event)" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,80)+'px'"></textarea>
+      <button id="awin-send" onclick="sendAwinMsg()">↑</button>
+    </div>
+    <div id="awin-savebar">
+      <button class="awin-save-btn" onclick="saveCustomAgent()">✦ Guardar en biblioteca</button>
+      <button class="awin-discard-btn" onclick="discardAgent()">Descartar</button>
+    </div>
+  </div>
+  <div id="awin-resize"></div>
+</div>
+
+<!-- EXPAND WINDOW -->
+<div id="expandwin" onclick="if(event.target===this)closeExpand()">
+  <div id="expandbox">
+    <div class="exhd">
+      <div class="exhd-title" id="ex-title">Editar</div>
+      <button class="excls" onclick="closeExpand()">✕</button>
+    </div>
+    <div id="expandcontent"></div>
+    <div class="ex-savebar">
+      <button class="ex-cancel" onclick="closeExpand()">Cancelar</button>
+      <button class="ex-save" onclick="saveExpand()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL (agent config) -->
+<div id="moverlay" onclick="if(event.target===this)closeM()">
+  <div id="modal">
+    <div class="mhd"><div class="mhd-dot" id="mdot"></div><div class="mhd-title" id="mtitle">Agente</div><div id="mbadge"></div><button class="mcls" onclick="closeM()">✕</button></div>
+    <div class="mtabs">
+      <div class="mtab on" onclick="stab(this,'cfg')">Config</div>
+      <div class="mtab" onclick="stab(this,'io')">I/O</div>
+      <div class="mtab" onclick="stab(this,'btns')">Botones</div>
+      <div class="mtab" onclick="stab(this,'logs')">Logs</div>
+      <div class="mtab" onclick="stab(this,'test')">Tests</div>
+      <div class="mtab" onclick="stab(this,'out')">Output</div>
+    </div>
+    <div class="mbody" id="mbody"></div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════
+// AGENT TYPE DEFINITIONS
+// ═══════════════════════════════════════
+const T={
+  pilot:{label:'Agente Piloto',icon:'◈',hbg:'#6a1a1a',hbg2:'#501212',dot:'#c85050',
+    meta:'Coordina el pipeline. Asigna tareas y consolida resultados.',goal:'Delegar, monitorear y reportar estado.',
+    subtasks:['Leer resultados Agente Resumen','Asignar tareas Agente UI/UX'],
+    actions:['Implementar codigo','Comparar interfaz'],actionIcons:['⏸','●'],actionColors:['#3a3028','#1a3a1a'],
+    vis:'tasks',cond:true,
+    inputType:'json',inputLabel:'Contexto del pipeline',inputDefault:'Usa configuración base del pipeline',
+    outputType:'json',outputLabel:'Estado de subagentes',
+    prompt:'Eres el agente coordinador principal. Delega tareas a subagentes, monitorea su progreso y consolida resultados. Output JSON.',
+    verification:'Todos los subagentes deben reportar estado OK.'},
+  research:{label:'Agente Investigación',icon:'⌕',hbg:'#1a3a2a',hbg2:'#122a1a',dot:'#3a9a6a',
+    meta:'Busca tendencias y genera lista de insights.',goal:'Top 10 ideas con potencial viral.',
+    subtasks:['Analizar tendencias X/Twitter','Medir engagement por tema'],
+    actions:['Generar lista','Ver ideas'],actionIcons:['⌕','≡'],actionColors:['#1a2a1a','#1a2a1a'],
+    vis:'list',cond:false,listItems:['La IA reemplazando diseñadores en 2026','Mini PCs ARM — benchmark real','Agentes autónomos: el nuevo SaaS','RAG explicado sin tecnicismos'],
+    inputType:'text',inputLabel:'Tema o nicho',inputDefault:'Asume nicho de tecnología e IA',
+    outputType:'json',outputLabel:'Lista de ideas rankadas',
+    prompt:'Investiga tendencias. Genera 10 ideas de video con alto engagement. Output: JSON array.',
+    verification:'Mínimo 5 ideas con engagement_score > 7.'},
+  human:{label:'Operador',icon:'◎',hbg:'#5a1a1a',hbg2:'#421212',dot:'#c8a040',
+    meta:'Punto de decisión del operador humano.',goal:'Aprobar, rechazar o editar.',
+    subtasks:['Presentar opciones al operador','Esperar decisión'],
+    actions:['Aprobar idea','Ver opciones'],actionIcons:['✓','→'],actionColors:['#1a2a1a','#1a1a2a'],
+    vis:'human',cond:true,
+    inputType:'json',inputLabel:'Opciones a revisar',inputDefault:'Requiere input — pipeline pausará',
+    outputType:'decision',outputLabel:'Decisión del operador',
+    prompt:'PUNTO DE APROBACIÓN HUMANA.',verification:'El operador debe tomar una decisión explícita.'},
+  prompt:{label:'Agente Prompt',icon:'✦',hbg:'#4a3010',hbg2:'#362208',dot:'#c8a040',
+    meta:'Genera prompts detallados por escena del guión.',goal:'Prompt por escena de 8s.',
+    subtasks:['Leer guión','Prompt por escena','Validar coherencia'],
+    actions:['Generar prompts','Comparar'],actionIcons:['⏸','●'],actionColors:['#2a2010','#1a2a10'],
+    vis:'text',cond:false,promptText:'Escena 1/5: Plano medio, manos en teclado. Luz azul fría. Slow push-in 2s. → Fade negro.',
+    inputType:'text',inputLabel:'Guión del video',inputDefault:'Solicita guión al agente anterior',
+    outputType:'text',outputLabel:'Prompts de escenas',
+    prompt:'Dado el guión, genera prompt detallado para cada escena de 8 segundos.',
+    verification:'Cada prompt debe incluir: plano, luz, movimiento, transición.'},
+  image:{label:'Agente Imagen',icon:'⬡',hbg:'#2a1060',hbg2:'#1e0a48',dot:'#8a5abf',
+    meta:'Genera imagen HD para cada escena.',goal:'Imágenes coherentes con el guión.',
+    subtasks:['Recibir prompt','Generar imagen HD','Verificar coherencia'],
+    actions:['Generar imagen','Verificar'],actionIcons:['⏸','●'],actionColors:['#1a1028','#181028'],
+    vis:'image',cond:false,
+    inputType:'text',inputLabel:'Prompt de escena',inputDefault:'Genera imagen genérica de referencia',
+    outputType:'image',outputLabel:'Imagen 1920×1080 16:9',
+    prompt:'Genera imagen fotorrealista 16:9 para la escena indicada.',
+    verification:'Ratio 16:9, coherencia de estilo con escenas anteriores.'},
+  video:{label:'Agente Video',icon:'▶',hbg:'#0e1e4a',hbg2:'#0a1636',dot:'#4a8abf',
+    meta:'Anima imagen a clip de 8 segundos.',goal:'Clips listos para ensamblaje.',
+    subtasks:['Recibir imagen+prompt','Generar clip 8s','Verificar movimiento'],
+    actions:['Generar clip','Ver preview'],actionIcons:['⏸','●'],actionColors:['#101828','#10182a'],
+    vis:'timeline',cond:false,
+    inputType:'image',inputLabel:'Imagen de escena',inputDefault:'Genera animación estática como placeholder',
+    outputType:'video',outputLabel:'Clip MP4 8 segundos',
+    prompt:'Convierte imagen en clip de 8 segundos. Aplica movimiento de cámara del prompt.',
+    verification:'Duración exacta 8 segundos. Movimiento coherente.'},
+  assembly:{label:'Agente Ensamblaje',icon:'⊞',hbg:'#3a1a08',hbg2:'#2a1206',dot:'#c87840',
+    meta:'Une clips y exporta el video final.',goal:'Video de 30-130 segundos.',
+    subtasks:['Recibir todos los clips','Aplicar transiciones','Exportar video final'],
+    actions:['Exportar video','Ver preview'],actionIcons:['⊞','▶'],actionColors:['#281a08','#201408'],
+    vis:'timeline',cond:false,
+    inputType:'video',inputLabel:'Array de clips MP4',inputDefault:'Combina con clips de prueba del pipeline',
+    outputType:'video',outputLabel:'Video final compilado',
+    prompt:'Ensambla clips en orden. Transiciones fluidas. 30-130 segundos.',
+    verification:'Duración en rango, transiciones correctas, orden del guión.'}
+};
+
+// IO type icons and labels
+const IO_ICONS={text:'✦',image:'⬡',video:'▶',json:'{ }',file:'📄',decision:'◈',audio:'♪',any:'◆'};
+const IO_COLORS={text:'#c8a040',image:'#8a5abf',video:'#4a8abf',json:'#3a8a3a',file:'#c87840',decision:'#c8a040',audio:'#6090c0',any:'#706860'};
+
+// ═══════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════
+let nodes=[],conns=[],outputCards=[],nid=1,ocid=1;
+let sc=1,px=0,py=0;
+let drag=null,dox=0,doy=0;
+let cardDrag=null,cdox=0,cdoy=0;
+let pan=false,psx=0,psy=0,ppx=0,ppy=0;
+let connMode=false,connFrom=null;
+let sel=null,modalId=null,ctab='cfg';
+let palT=null,ctxId=null;
+let expandTarget=null,expandFieldName=null;
+let customSkills=[],builderMode='agent';
+let awinStep=0,awinBuilding={},awinTyping=false,awinPrevH=520,awinMinimized=false;
+let logFilter='all',logPrevH=220,logMinimized=false;
+let operatorWaiting=false;
+
+const IMGS=[
+  'data:image/svg+xml,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 230 90"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#120824"/><stop offset="60%" stop-color="#080e24"/><stop offset="100%" stop-color="#1a0818"/></linearGradient></defs><rect width="230" height="90" fill="url(#g)"/><circle cx="115" cy="45" r="24" fill="none" stroke="rgba(130,80,200,.3)" stroke-width="1"/><text x="115" y="82" font-size="7" fill="rgba(255,255,255,.15)" text-anchor="middle" font-family="monospace">ESCENA_01.png</text></svg>`),
+  'data:image/svg+xml,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 230 90"><rect width="230" height="90" fill="#080814"/><line x1="20" y1="65" x2="210" y2="65" stroke="rgba(74,130,200,.2)" stroke-width=".8"/><rect x="28" y="48" width="16" height="17" fill="rgba(74,130,200,.1)" stroke="rgba(74,130,200,.2)" stroke-width=".5"/><rect x="52" y="35" width="16" height="30" fill="rgba(74,130,200,.14)" stroke="rgba(74,130,200,.25)" stroke-width=".5"/><rect x="76" y="42" width="16" height="23" fill="rgba(74,130,200,.1)" stroke="rgba(74,130,200,.2)" stroke-width=".5"/><rect x="100" y="25" width="16" height="40" fill="rgba(74,130,200,.18)" stroke="rgba(74,130,200,.3)" stroke-width=".5"/><text x="115" y="82" font-size="7" fill="rgba(255,255,255,.12)" text-anchor="middle" font-family="monospace">ESCENA_03.png</text></svg>`)
+];
+
+// ══════════════════════════════
+// GRID
+// ══════════════════════════════
+function drawBG(){
+  const cv=document.getElementById('bg'),c=cv.getContext('2d');
+  cv.width=window.innerWidth;cv.height=window.innerHeight;
+  c.fillStyle='#1c1816';c.fillRect(0,0,cv.width,cv.height);
+  const gs=26;c.fillStyle='rgba(255,255,255,.05)';
+  for(let x=(px%gs+gs)%gs;x<cv.width;x+=gs)
+    for(let y=(py%gs+gs)%gs;y<cv.height;y+=gs)
+      c.fillRect(x-.8,y-.8,1.4,1.4);
+}
+window.addEventListener('resize',drawBG);drawBG();
+
+// ══════════════════════════════
+// TRANSFORM
+// ══════════════════════════════
+function applyT(){
+  document.getElementById('canvas').style.transform=`translate(${px}px,${py}px) scale(${sc})`;
+  document.getElementById('zl').textContent=Math.round(sc*100)+'%';
+  drawBG();updateMM();
+}
+function dz(d){sc=Math.max(.15,Math.min(3,sc+d));applyT();}
+function fitAll(){
+  if(!nodes.length&&!outputCards.length){sc=1;px=0;py=0;applyT();return;}
+  const allX=[...nodes.map(n=>n.x),...outputCards.map(c=>c.x)];
+  const allY=[...nodes.map(n=>n.y),...outputCards.map(c=>c.y)];
+  const x0=Math.min(...allX)-60,y0=Math.min(...allY)-60;
+  const x1=Math.max(...allX)+260,y1=Math.max(...allY)+200;
+  const w=window.innerWidth,h=window.innerHeight;
+  sc=Math.min(w/(x1-x0),h/(y1-y0),.9);
+  px=-x0*sc+(w-(x1-x0)*sc)/2;py=-y0*sc+(h-(y1-y0)*sc)/2;
+  applyT();
+}
+
+// ══════════════════════════════
+// NODE BUILD
+// ══════════════════════════════
+function ioSectionHTML(n){
+  const tp=T[n.type];
+  const inType=n.inputType||tp.inputType||'any';
+  const outType=n.outputType||tp.outputType||'any';
+  const inColor=IO_COLORS[inType]||'#706860';
+  const outColor=IO_COLORS[outType]||'#706860';
+  const inIcon=IO_ICONS[inType]||'◆';
+  const outIcon=IO_ICONS[outType]||'◆';
+  const inLabel=n.inputLabel||tp.inputLabel||'Input';
+  const outLabel=n.outputLabel||tp.outputLabel||'Output';
+  const inDef=n.inputDefault||tp.inputDefault||'';
+  return`<div class="nio">
+    <div class="nio-half">
+      <div class="nio-lbl" style="color:${inColor}88">Recibe</div>
+      <div class="nio-type"><span class="nio-icon" style="color:${inColor}">${inIcon}</span><span style="color:${inColor}">${inType}</span></div>
+      <div style="font-size:9px;color:#706860;margin-top:2px">${inLabel}</div>
+      ${inDef?`<div class="nio-default">${inDef}</div>`:''}
+    </div>
+    <div class="nio-half">
+      <div class="nio-lbl" style="color:${outColor}88">Entrega</div>
+      <div class="nio-type"><span class="nio-icon" style="color:${outColor}">${outIcon}</span><span style="color:${outColor}">${outType}</span></div>
+      <div style="font-size:9px;color:#706860;margin-top:2px">${outLabel}</div>
+    </div>
+  </div>`;
+}
+
+function metaHTML(n){
+  const tp=T[n.type];
+  const meta=n.meta||tp.meta||'';
+  const goal=n.goal||tp.goal||'';
+  const short=s=>s.length>55?s.slice(0,52)+'…':s;
+  return`<div class="nmeta" onclick="openExpandField(event,'${n.id}','meta')" title="Click para expandir">
+    <div class="nmeta-row"><b>Meta:</b><span class="nmeta-txt">${short(meta)}</span></div>
+    <div class="nmeta-row"><b>Goal:</b><span class="nmeta-txt">${short(goal)}</span></div>
+    <div class="nmeta-expand-hint">click para ver / editar</div>
+  </div>`;
+}
+
+function visHTML(n){
+  const tp=T[n.type];
+  if(tp.vis==='image'){
+    if(n.status==='done'&&n.img)return`<div class="nvis"><img class="nvis-img" src="${n.img}"/></div>`;
+    if(n.status==='running')return`<div class="nvis"><div class="nvis-gen"><div class="scanline"></div>GENERANDO IMAGEN...</div></div>`;
+    return`<div class="nvis"><div class="nvis-placeholder"><svg width="26" height="26" viewBox="0 0 28 28"><rect x="1" y="4" width="26" height="20" rx="2" fill="none" stroke="white" stroke-width="1"/><circle cx="9" cy="12" r="2.5" fill="none" stroke="white" stroke-width="1"/><path d="M1 19 L9 13 L15 18 L20 15 L27 19" fill="none" stroke="white" stroke-width="1"/></svg><span>ESPERANDO PROMPT</span></div></div>`;
+  }
+  if(tp.vis==='text')return`<div class="nvis"><div class="nvis-prompt"><div class="nvis-prompt-lbl">Prompt activo</div><div class="nvis-prompt-txt" onclick="openExpandField(event,'${n.id}','promptOut')" style="cursor:pointer">${n.promptOut||tp.promptText||'Esperando guión...'}</div></div></div>`;
+  if(tp.vis==='list')return`<div class="nvis"><div class="nvis-list">${(tp.listItems||[]).slice(0,3).map(i=>`<div class="nvis-li"><span style="color:#3a3630">›</span>${i}</div>`).join('')}</div></div>`;
+  if(tp.vis==='timeline'){
+    const pct=n.status==='done'?100:n.status==='running'?45:0;
+    const clr=n.type==='video'?'#4a7abf':'#c87840';
+    const clips=n.type==='assembly'?['01','02','03','04','05']:['01','02','03'];
+    return`<div class="nvis"><div class="nvis-timeline"><div style="font-size:7px;color:#3a3630;margin-bottom:2px">PROGRESO — ${pct}%</div><div class="ntl-bar"><div class="ntl-fill" style="width:${pct}%;background:${clr}30;border-right:2px solid ${clr}"></div></div><div class="ntl-clips">${clips.map(c=>`<div class="ntl-clip" style="background:${clr}10;border:1px solid ${clr}25">${c}</div>`).join('')}</div></div></div>`;
+  }
+  if(tp.vis==='human')return`<div class="nvis"><div class="happrove"><div class="happrove-lbl">Esperando decisión del operador</div><div class="happrove-btns"><button class="hbtn yes" onclick="event.stopPropagation();humanDecide('${n.id}','yes')">✓ Aprobar</button><button class="hbtn no" onclick="event.stopPropagation();humanDecide('${n.id}','no')">✕ Rechazar</button><button class="hbtn edit" onclick="event.stopPropagation();openExpandField(event,'${n.id}','humanEdit')">✎ Editar</button></div></div></div>`;
+  return'';
+}
+
+function actionsHTML(n){
+  const tp=T[n.type];
+  const btns=n.customBtns||tp.actions.map((a,i)=>({label:a,icon:tp.actionIcons[i],bg:tp.actionColors[i]||'#0f0d0c',fg:'#706860',action:''}));
+  return`<div class="nactions">${btns.map((b,i)=>`<button class="nact" style="background:${b.bg}" onclick="event.stopPropagation()"><div class="nact-ico" style="background:rgba(0,0,0,.3);color:${b.fg||'#706860'}">${b.icon}</div><span style="color:${b.fg||'#706860'}">${b.label}</span><div class="nstatus-dot ${i===btns.length-1?n.status:'idle'}" style="margin-left:auto"></div></button>`).join('')}</div>`;
+}
+
+function mkNode(n){
+  const tp=T[n.type];
+  const el=document.createElement('div');el.className='node';el.id=n.id;
+  el.style.cssText=`left:${n.x}px;top:${n.y}px;overflow:visible`;
+  const hasCond=tp.cond;
+
+  // Skill rings — outside wrapper
+  const skillRingsHTML=(n.skills||[]).map((sk,i)=>`
+    <div class="skill-ring" style="inset:-${(i+1)*5}px;border:1px solid ${sk.color||'#4a7abf'}33;border-radius:${7+(i+1)*2}px;box-shadow:0 0 ${8+(i*4)}px ${sk.color||'#4a7abf'}12">
+      <div class="skill-tag" style="left:${8+i*4}px;color:${sk.color||'#4a7abf'};border:1px solid ${sk.color||'#4a7abf'}22">⬡ ${sk.name}</div>
+    </div>`).join('');
+
+  el.innerHTML=`
+    ${skillRingsHTML}
+    <div class="node-inner">
+      <div class="scanline"></div>
+      <div class="port in" data-nid="${n.id}" data-pt="in"></div>
+      ${hasCond?`
+        <div class="port out-y" data-nid="${n.id}" data-pt="out-y"></div>
+        <div class="port out-n" data-nid="${n.id}" data-pt="out-n"></div>
+        <span class="plbl y">SÍ</span><span class="plbl n">NO</span>
+      `:`<div class="port out" data-nid="${n.id}" data-pt="out"></div>`}
+      <div class="nh" style="background:linear-gradient(135deg,${tp.hbg},${tp.hbg2})">
+        <div class="nh-left"><span class="nh-icon">${tp.icon}</span><span class="nh-name">${n.name}</span></div>
+        <div class="nh-right">
+          <button class="nc" onclick="runNode('${n.id}')" style="color:#3a8a3a" title="Run">▶</button>
+          <button class="nc" onclick="pauseNode('${n.id}')" style="color:#c8a040" title="Pause">⏸</button>
+          <button class="nc" onclick="stopNode('${n.id}')" style="color:#8a3a3a" title="Stop">■</button>
+          <button class="nc" onclick="openM('${n.id}')" title="Config">⚙</button>
+        </div>
+      </div>
+      <div style="background:#0f0d0c">
+        ${ioSectionHTML(n)}
+        ${metaHTML(n)}
+        <div class="nsubtasks">${tp.subtasks.map(s=>`<div class="nsub">· ${s}</div>`).join('')}</div>
+        <div id="vis_${n.id}">${visHTML(n)}</div>
+        ${actionsHTML(n)}
+        <div class="nfoot">
+          <span class="nfoot-st" id="fst_${n.id}">${stlabel(n.status)}</span>
+          <button class="nfoot-cfg" onclick="openM('${n.id}')">⚙ CONFIG</button>
+        </div>
+      </div>
+    </div>`;
+
+  el.addEventListener('mousedown',e=>nmd(e,n.id));
+  el.addEventListener('dblclick',()=>openM(n.id));
+  el.querySelectorAll('.port').forEach(p=>{
+    p.addEventListener('mousedown',e=>{if(connMode){e.stopPropagation();connFrom={nid:n.id,pt:p.dataset.pt,src:'node'};}});
+    p.addEventListener('mouseup',e=>{if(connMode&&connFrom&&connFrom.nid!==n.id){e.stopPropagation();finishConn(n.id,p.dataset.pt);}});
+  });
+  document.getElementById('canvas').appendChild(el);
+}
+
+function addNode(type,x,y){
+  const tp=T[type]||{};
+  const n={id:'n'+(nid++),type,x,y,name:tp.label||type,
+    status:'idle',img:null,promptOut:null,output:'',meta:'',goal:'',
+    inputType:tp.inputType,outputType:tp.outputType,
+    inputLabel:tp.inputLabel,outputLabel:tp.outputLabel,
+    inputDefault:tp.inputDefault,
+    prompt:tp.prompt||'',verification:tp.verification||'',
+    logs:[{t:'--:--',m:'Agente creado',c:''}],skills:[],
+    tests:[{name:'Formato input',status:'pend',desc:'Verifica input correcto'},{name:'Formato output',status:'pend',desc:'Valida output JSON'}]
+  };
+  nodes.push(n);mkNode(n);updateMM();return n;
+}
+function addNodeCenter(type){addNode(type,(window.innerWidth/2-px)/sc-115,(window.innerHeight/2-py)/sc-120);}
+
+// ══════════════════════════════
+// OUTPUT CARDS (dropped by agents)
+// ══════════════════════════════
+function dropOutputCard(fromNodeId, x, y){
+  const n=nodes.find(x=>x.id===fromNodeId);if(!n)return;
+  const tp=T[n.type];
+  const outType=n.outputType||tp.outputType||'text';
+  const outLabel=n.outputLabel||tp.outputLabel||'Output';
+  const oc={
+    id:'oc'+(ocid++), fromNodeId, fromNodeName:n.name,
+    fromDot:tp.dot||'#706860', type:outType, label:outLabel,
+    content:generateMockContent(n,outType), x, y
+  };
+  outputCards.push(oc);
+  mkOutputCard(oc);
+  drawConns();
+}
+
+function generateMockContent(n,type){
+  if(type==='image')return n.img||IMGS[0];
+  if(type==='json')return JSON.stringify({status:'success',agent:n.name,result:'Tarea completada',ts:new Date().toISOString()},null,2);
+  if(type==='text')return n.promptOut||'Escena 1: Plano medio de manos escribiendo. Iluminación lateral azul. Slow push-in 2s. → Cross-dissolve.';
+  if(type==='video')return null;
+  if(type==='decision')return 'Operador aprobó: continuar con idea seleccionada.';
+  return n.output||'Output del agente';
+}
+
+function mkOutputCard(oc){
+  const el=document.createElement('div');
+  el.className='output-card';el.id=oc.id;
+  el.style.cssText=`left:${oc.x}px;top:${oc.y}px`;
+  const tc=IO_COLORS[oc.type]||'#706860';
+  const previewHTML=getCardPreview(oc);
+  el.innerHTML=`
+    <div class="port in" data-nid="${oc.id}" data-pt="in" style="top:50%"></div>
+    <div class="oc-header">
+      <div class="oc-from"><div class="oc-from-dot" style="background:${oc.fromDot}"></div><span>${oc.fromNodeName}</span></div>
+      <span class="oc-type ${oc.type}">${IO_ICONS[oc.type]||'◆'} ${oc.type}</span>
+    </div>
+    <div class="oc-body" onclick="expandCard('${oc.id}')" title="Click para ver completo">
+      ${previewHTML}
+      <div class="oc-expand-hint">ver / editar</div>
+    </div>
+    <div class="oc-footer">
+      <span class="oc-size" style="color:${tc}88">${oc.label}</span>
+      <div class="oc-actions">
+        <button class="oc-btn" onclick="event.stopPropagation();expandCard('${oc.id}')" title="Expandir">⤢</button>
+        <button class="oc-btn" onclick="event.stopPropagation();deleteCard('${oc.id}')" title="Eliminar">✕</button>
+      </div>
+      <div class="oc-connect-port" data-nid="${oc.id}" data-pt="out" title="Conectar como entrada"
+        onmousedown="e=>{if(connMode){e.stopPropagation();connFrom={nid:'${oc.id}',pt:'out',src:'card'};}}" ></div>
+    </div>`;
+
+  el.addEventListener('mousedown',e=>cardMouseDown(e,oc.id));
+  // port connect
+  const outPort=el.querySelector('.oc-connect-port');
+  outPort.addEventListener('mousedown',e=>{
+    if(connMode){e.stopPropagation();connFrom={nid:oc.id,pt:'out',src:'card'};}
+  });
+  const inPort=el.querySelector('.port.in');
+  inPort.addEventListener('mouseup',e=>{
+    if(connMode&&connFrom&&connFrom.nid!==oc.id){e.stopPropagation();finishConn(oc.id,'in');}
+  });
+  document.getElementById('canvas').appendChild(el);
+}
+
+function getCardPreview(oc){
+  if(oc.type==='image'&&oc.content&&oc.content.startsWith('data:'))
+    return`<img class="oc-preview-img" src="${oc.content}"/>`;
+  if(oc.type==='json')
+    return`<div class="oc-preview-json">${(oc.content||'').slice(0,120)}</div>`;
+  return`<div class="oc-preview-txt">${(oc.content||'').slice(0,140)}</div>`;
+}
+
+function cardMouseDown(e,id){
+  if(e.button!==0)return;
+  if(e.target.tagName==='BUTTON'||e.target.classList.contains('oc-connect-port')||e.target.classList.contains('port'))return;
+  e.stopPropagation();
+  const oc=outputCards.find(c=>c.id===id);if(!oc)return;
+  cardDrag=id;
+  const wrap=document.getElementById('wrap').getBoundingClientRect();
+  cdox=(e.clientX-wrap.left-px)/sc-oc.x;cdoy=(e.clientY-wrap.top-py)/sc-oc.y;
+}
+
+function expandCard(id){
+  const oc=outputCards.find(c=>c.id===id);if(!oc)return;
+  expandTarget={type:'card',id};
+  document.getElementById('ex-title').textContent=`${oc.fromNodeName} → ${oc.type}`;
+  const body=document.getElementById('expandcontent');
+  if(oc.type==='image'&&oc.content?.startsWith('data:'))
+    body.innerHTML=`<img src="${oc.content}" style="width:100%;border-radius:4px;display:block;margin-bottom:10px"><textarea class="ex-textarea" placeholder="Notas sobre esta imagen..." style="min-height:80px"></textarea>`;
+  else
+    body.innerHTML=`<textarea class="ex-textarea" id="ex-edit">${oc.content||''}</textarea>`;
+  document.getElementById('expandwin').classList.add('open');
+}
+
+function deleteCard(id){
+  document.getElementById(id)?.remove();
+  outputCards=outputCards.filter(c=>c.id!==id);
+  conns=conns.filter(c=>c.from!==id&&c.to!==id);
+  drawConns();
+}
+
+// ══════════════════════════════
+// EXPAND WINDOW (meta/goal/text)
+// ══════════════════════════════
+function openExpandField(e,nodeId,field){
+  e.stopPropagation();
+  const n=nodes.find(x=>x.id===nodeId);if(!n)return;
+  expandTarget={type:'node',id:nodeId,field};
+  const tp=T[n.type];
+  let title='',content='';
+  if(field==='meta'){title='Meta / Goal';content=`META:\n${n.meta||tp.meta||''}\n\nGOAL:\n${n.goal||tp.goal||''}`;}
+  else if(field==='promptOut'){title='Prompt / Output texto';content=n.promptOut||tp.promptText||'';}
+  else if(field==='humanEdit'){title='Decisión del Operador — Editar contexto';content=n.humanNote||'Escribe aquí las notas o contexto adicional para la decisión...';}
+  else{title=field;content=n[field]||'';}
+  document.getElementById('ex-title').textContent=title;
+  document.getElementById('expandcontent').innerHTML=`<textarea class="ex-textarea" id="ex-edit">${content}</textarea>`;
+  document.getElementById('expandwin').classList.add('open');
+}
+
+function saveExpand(){
+  const ta=document.getElementById('ex-edit');if(!ta)return;
+  const val=ta.value;
+  if(expandTarget?.type==='node'){
+    const n=nodes.find(x=>x.id===expandTarget.id);
+    if(n){
+      if(expandTarget.field==='meta'){
+        const lines=val.split('\n');
+        const mi=lines.findIndex(l=>l.startsWith('META:'));
+        const gi=lines.findIndex(l=>l.startsWith('GOAL:'));
+        n.meta=lines.slice(mi+1,gi>=0?gi:undefined).join('\n').trim()||val;
+        n.goal=gi>=0?lines.slice(gi+1).join('\n').trim():'';
+      } else n[expandTarget.field]=val;
+      // Re-render meta section
+      const el=document.getElementById(n.id);
+      if(el){const m=el.querySelector('.nmeta');if(m)m.outerHTML=metaHTML(n);}
+    }
+  } else if(expandTarget?.type==='card'){
+    const oc=outputCards.find(c=>c.id===expandTarget.id);
+    if(oc){oc.content=val;const el=document.getElementById(oc.id);if(el){const b=el.querySelector('.oc-body');if(b)b.innerHTML=getCardPreview(oc)+`<div class="oc-expand-hint">ver / editar</div>`;}}
+  }
+  closeExpand();
+}
+function closeExpand(){document.getElementById('expandwin').classList.remove('open');expandTarget=null;}
+
+// ══════════════════════════════
+// STATUS & EXECUTION
+// ══════════════════════════════
+function stlabel(s){return{idle:'IDLE',running:'RUNNING',done:'DONE',error:'ERROR',paused:'PAUSED'}[s]||'IDLE';}
+
+function setStatus(id,s){
+  const n=nodes.find(x=>x.id===id);if(!n)return;n.status=s;
+  const el=document.getElementById(id);if(!el)return;
+  el.classList.toggle('running',s==='running');
+  el.classList.toggle('awaiting-input',s==='awaiting-input');
+  const ft=document.getElementById('fst_'+id);if(ft)ft.textContent=stlabel(s);
+  const dots=el.querySelectorAll('.nstatus-dot');
+  if(dots.length)dots[dots.length-1].className='nstatus-dot '+(s==='awaiting-input'?'running':s);
+}
+
+const AGENT_THOUGHTS={
+  pilot:['Analizando estado de subagentes...','Detectando dependencias entre tareas...','Calculando orden de ejecución...','Delegando tarea a Agente Prompt'],
+  research:['Escaneando X/Twitter por hashtags trending...','Analizando ratio engagement/impresiones...','Filtrando ideas con potencial > 7/10...','Generando lista ordenada...'],
+  prompt:['Leyendo guión: 6 escenas de 8s...','Calculando transiciones necesarias...','Verificando coherencia de paleta...','Prompt de escena 3 generado...'],
+  image:['Recibiendo prompt de escena...','Analizando consistencia de estilo...','Generando imagen 1920×1080...','Verificando ratio 16:9...'],
+  video:['Recibiendo imagen + prompt...','Calculando keyframes...','Verificando duración: 8.00s...','Aplicando transición cross-dissolve...'],
+  assembly:['Verificando que todos los clips estén listos...','Ordenando según guión...','Calculando duración total...','Renderizando en 1080p...'],
+  human:['Esperando decisión del operador...','Pipeline en pausa — requiere input humano...','Timeout en 60 segundos...']
+};
+
+function runNode(id){
+  const n=nodes.find(x=>x.id===id);if(!n)return;
+  const tp=T[n.type];
+
+  // Human node triggers operator warning
+  if(n.type==='human'){
+    setStatus(id,'awaiting-input');
+    triggerOperatorWarning(n.name);
+    return;
+  }
+
+  setStatus(id,'running');
+  n.logs.push({t:ts(),m:'Iniciando...',c:'wn'});
+  glog('system',n.name,n.type,'Iniciando agente...');
+  const thoughts=AGENT_THOUGHTS[n.type]||[];
+  let step=0,tidx=0;
+  const iv=setInterval(()=>{
+    if(step<(tp.subtasks?.length||2)){
+      const sub=tp.subtasks[step];
+      n.logs.push({t:ts(),m:'→ '+sub,c:'wn'});
+      glog('action',n.name,n.type,sub);
+      if(tidx<thoughts.length)setTimeout(()=>glog('think',n.name,n.type,thoughts[tidx++]),200);
+      if(tidx<thoughts.length)setTimeout(()=>glog('think',n.name,n.type,thoughts[tidx++]),600);
+      step++;
+    }else{
+      clearInterval(iv);
+      if(n.type==='image')n.img=IMGS[Math.floor(Math.random()*IMGS.length)];
+      if(n.type==='prompt')n.promptOut='Escena '+Math.ceil(Math.random()*5)+': Plano americano, figura contra ventana con lluvia. Iluminación difusa, paleta #0a1020. Dolly-out 3s. → Cross-dissolve.';
+      setStatus(id,'done');
+      n.output=`{\n  "status":"success",\n  "agent":"${n.name}",\n  "ts":"${new Date().toISOString()}"\n}`;
+      n.logs.push({t:ts(),m:'Completado',c:'ok'});
+      glog('done',n.name,n.type,'Output listo — dropeando card');
+      // Drop output card below/right of node
+      const el=document.getElementById(id);
+      const cardX=n.x+250,cardY=n.y+20;
+      dropOutputCard(id,cardX,cardY);
+      // Activate connections
+      conns.filter(c=>c.from===id).forEach(c=>c.active=true);
+      const vis=document.getElementById('vis_'+id);if(vis)vis.innerHTML=visHTML(n);
+      drawConns();
+    }
+  },750);
+}
+
+function triggerOperatorWarning(agentName){
+  operatorWaiting=true;
+  const logwin=document.getElementById('logwin');
+  const bar=document.getElementById('logtbar');
+  const badge=document.getElementById('log-badge');
+  const title=document.getElementById('logtitle');
+  logwin.classList.add('operator-waiting');
+  bar.classList.add('hazard');
+  badge.textContent='⚠ OPERADOR';badge.classList.add('operator');
+  title.textContent='⚠ PIPELINE PAUSADO — REQUIERE INPUT';
+  glog('operator','Pipeline','system',`"${agentName}" requiere una decisión para continuar`);
+  glog('operator','Pipeline','system','Haz click en el nodo del Operador para aprobar/rechazar');
+  // Flash the logwin open if minimized
+  if(logMinimized){logMinimized=false;logwin.classList.remove('minimized');logwin.style.height=logPrevH+'px';}
+}
+
+function clearOperatorWarning(){
+  operatorWaiting=false;
+  const logwin=document.getElementById('logwin');
+  const bar=document.getElementById('logtbar');
+  const badge=document.getElementById('log-badge');
+  const title=document.getElementById('logtitle');
+  logwin.classList.remove('operator-waiting');
+  bar.classList.remove('hazard');
+  badge.textContent='LISTO';badge.classList.remove('operator');
+  title.textContent='Log Global — Pipeline';
+}
+
+function pauseNode(id){const n=nodes.find(x=>x.id===id);if(!n)return;setStatus(id,n.status==='paused'?'running':'paused');}
+function stopNode(id){const n=nodes.find(x=>x.id===id);if(!n)return;setStatus(id,'idle');}
+function humanDecide(id,dec){
+  const n=nodes.find(x=>x.id===id);if(!n)return;
+  setStatus(id,'done');
+  conns.filter(c=>c.from===id&&c.cond&&c.condT===dec).forEach(c=>c.active=true);
+  n.logs.push({t:ts(),m:'Operador: '+dec.toUpperCase(),c:'ok'});
+  glog('decision',n.name,n.type,'Decisión: '+dec.toUpperCase()+' → activando rama '+(dec==='yes'?'SÍ':'NO'));
+  clearOperatorWarning();
+  dropOutputCard(id,n.x+250,n.y+20);
+  drawConns();
+}
+function runAll(){nodes.forEach((n,i)=>setTimeout(()=>runNode(n.id),i*900));}
+function stopAll(){nodes.forEach(n=>stopNode(n.id));clearOperatorWarning();}
+function resetAll(){
+  stopAll();conns.forEach(c=>c.active=false);
+  // Remove output cards
+  outputCards.forEach(oc=>document.getElementById(oc.id)?.remove());
+  outputCards=[];
+  nodes.forEach(n=>{n.img=null;n.promptOut=null;const v=document.getElementById('vis_'+n.id);if(v)v.innerHTML=visHTML(n);});
+  drawConns();
+}
+function delSel(){
+  if(!sel)return;
+  document.getElementById(sel)?.remove();
+  nodes=nodes.filter(n=>n.id!==sel);
+  conns=conns.filter(c=>c.from!==sel&&c.to!==sel);
+  outputCards=outputCards.filter(c=>c.id!==sel);
+  sel=null;drawConns();updateMM();
+}
+function ts(){return new Date().toTimeString().slice(0,8);}
+
+// ══════════════════════════════
+// DRAG & PAN
+// ══════════════════════════════
+function nmd(e,id){
+  if(e.button!==0)return;
+  if(e.target.classList.contains('port')||e.target.tagName==='BUTTON'||e.target.classList.contains('nmeta')||e.target.classList.contains('nmeta-txt')||e.target.classList.contains('nvis-prompt-txt'))return;
+  e.stopPropagation();selN(id);
+  const n=nodes.find(x=>x.id===id);
+  drag=id;const wrap=document.getElementById('wrap').getBoundingClientRect();
+  dox=(e.clientX-wrap.left-px)/sc-n.x;doy=(e.clientY-wrap.top-py)/sc-n.y;
+}
+function wmd(e){
+  if(e.button===1||(e.button===0&&e.altKey)){startPan(e);e.preventDefault();return;}
+  if(e.button===0&&!drag&&!cardDrag&&!connMode){selN(null);startPan(e);}
+}
+function startPan(e){pan=true;psx=e.clientX;psy=e.clientY;ppx=px;ppy=py;document.getElementById('wrap').style.cursor='grabbing';}
+function wmm(e){
+  const wrap=document.getElementById('wrap').getBoundingClientRect();
+  if(pan){px=ppx+(e.clientX-psx);py=ppy+(e.clientY-psy);applyT();}
+  if(drag){
+    const n=nodes.find(x=>x.id===drag);
+    n.x=Math.max(0,(e.clientX-wrap.left-px)/sc-dox);n.y=Math.max(0,(e.clientY-wrap.top-py)/sc-doy);
+    const el=document.getElementById(drag);el.style.left=n.x+'px';el.style.top=n.y+'px';
+    drawConns();updateMM();
+  }
+  if(cardDrag){
+    const oc=outputCards.find(c=>c.id===cardDrag);if(oc){
+      oc.x=Math.max(0,(e.clientX-wrap.left-px)/sc-cdox);oc.y=Math.max(0,(e.clientY-wrap.top-py)/sc-cdoy);
+      const el=document.getElementById(cardDrag);if(el){el.style.left=oc.x+'px';el.style.top=oc.y+'px';}
+      drawConns();
+      // Highlight connectable nodes on hover
+      highlightConnectable(oc.x+100,oc.y+50);
+    }
+  }
+  if(connFrom){
+    const mx=(e.clientX-wrap.left-px)/sc,my=(e.clientY-wrap.top-py)/sc;
+    const sp=ppos2(connFrom);
+    if(sp){const p=document.getElementById('tc');p.setAttribute('d',cubic(sp.x,sp.y,mx,my));p.style.display='block';}
+  }
+}
+function wmu(e){
+  if(pan){pan=false;document.getElementById('wrap').style.cursor='default';}
+  if(drag)drag=null;
+  if(cardDrag){
+    // Check if dropped on a node port area to auto-connect
+    const oc=outputCards.find(c=>c.id===cardDrag);
+    if(oc){
+      const target=findNodeAtPos(oc.x,oc.y+60);
+      if(target&&target!==oc.fromNodeId){
+        conns.push({from:oc.id,fp:'out',to:target,tp:'in',active:true,fromCard:true});
+        document.getElementById(oc.id)?.classList.add('connectable');
+        glog('action','Canvas','system',`Output card conectada a ${nodes.find(n=>n.id===target)?.name||target}`);
+        drawConns();
+      }
+    }
+    clearHighlight();cardDrag=null;
+  }
+  if(connFrom&&!e.target.classList.contains('port')&&!e.target.classList.contains('oc-connect-port')){connFrom=null;document.getElementById('tc').style.display='none';}
+}
+function ww(e){
+  e.preventDefault();const d=-e.deltaY*.001;const ns=Math.max(.15,Math.min(3,sc+d));
+  px=e.clientX-(e.clientX-px)*(ns/sc);py=e.clientY-(e.clientY-py)*(ns/sc);sc=ns;applyT();
+}
+function highlightConnectable(x,y){
+  nodes.forEach(n=>{
+    const el=document.getElementById(n.id);if(!el)return;
+    const near=Math.abs(n.x-x)<120&&Math.abs(n.y-y)<100;
+    el.style.filter=near?'brightness(1.2)':'';
+  });
+}
+function clearHighlight(){nodes.forEach(n=>{const el=document.getElementById(n.id);if(el)el.style.filter='';});}
+function findNodeAtPos(x,y){
+  for(const n of nodes){const el=document.getElementById(n.id);if(!el)continue;const h=el.offsetHeight;if(x>n.x&&x<n.x+230&&y>n.y&&y<n.y+h)return n.id;}return null;
+}
+
+// ══════════════════════════════
+// CONNECTIONS
+// ══════════════════════════════
+function toggleConn(){
+  connMode=!connMode;
+  document.getElementById('connbtn').classList.toggle('act',connMode);
+  document.getElementById('wrap').style.cursor=connMode?'crosshair':'default';
+}
+function finishConn(toId,toPt){
+  if(!connFrom)return;
+  const isCond=connFrom.pt==='out-y'||connFrom.pt==='out-n';
+  const fromCard=connFrom.src==='card';
+  conns.push({from:connFrom.nid,fp:connFrom.pt,to:toId,tp:toPt,active:fromCard,cond:isCond,condT:connFrom.pt==='out-y'?'yes':'no',fromCard});
+  if(fromCard){
+    document.getElementById(connFrom.nid)?.classList.add('connectable');
+    glog('action','Canvas','system','Output card conectada a '+( nodes.find(n=>n.id===toId)?.name||toId));
+  }
+  connFrom=null;document.getElementById('tc').style.display='none';drawConns();updateMM();
+}
+function ppos(nid,pt){
+  const el=document.getElementById(nid);if(!el)return null;
+  const port=el.querySelector(`.port.${pt}`);if(!port)return null;
+  const pr=port.getBoundingClientRect(),wrap=document.getElementById('wrap').getBoundingClientRect();
+  return{x:(pr.left+pr.width/2-wrap.left-px)/sc,y:(pr.top+pr.height/2-wrap.top-py)/sc};
+}
+function ppos2(cf){
+  // Handle both node ports and card connect port
+  const el=document.getElementById(cf.nid);if(!el)return null;
+  const portSel=cf.src==='card'?'.oc-connect-port':`.port.${cf.pt}`;
+  const port=el.querySelector(portSel);if(!port)return null;
+  const pr=port.getBoundingClientRect(),wrap=document.getElementById('wrap').getBoundingClientRect();
+  return{x:(pr.left+pr.width/2-wrap.left-px)/sc,y:(pr.top+pr.height/2-wrap.top-py)/sc};
+}
+function cubic(x1,y1,x2,y2){const d=Math.abs(x2-x1)*.5;return`M${x1},${y1} C${x1+d},${y1} ${x2-d},${y2} ${x2},${y2}`;}
+function getPortPos(id,pt){
+  // Works for both nodes and output cards
+  const el=document.getElementById(id);if(!el)return null;
+  let portEl=el.querySelector(`.port.${pt}`)||el.querySelector('.oc-connect-port');
+  if(!portEl)return null;
+  const pr=portEl.getBoundingClientRect(),wrap=document.getElementById('wrap').getBoundingClientRect();
+  return{x:(pr.left+pr.width/2-wrap.left-px)/sc,y:(pr.top+pr.height/2-wrap.top-py)/sc};
+}
+function drawConns(){
+  const svg=document.getElementById('svgl');svg.querySelectorAll('.cpath').forEach(p=>p.remove());
+  conns.forEach(c=>{
+    const fp=getPortPos(c.from,c.fp),tp=getPortPos(c.to,c.tp||'in');
+    if(!fp||!tp)return;
+    const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d',cubic(fp.x,fp.y,tp.x,tp.y));
+    let cls='cpath',marker='ma';
+    if(c.fromCard){cls='cpath card-conn';if(c.active)cls+=' active';marker=c.active?'ma-a':'ma-card';}
+    else if(c.active){cls+=' active';marker='ma-a';}
+    else if(c.cond){cls+=c.condT==='yes'?' cy':' cn';marker=c.condT==='yes'?'ma-y':'ma-n';}
+    path.setAttribute('class',cls);path.setAttribute('marker-end',`url(#${marker})`);
+    svg.appendChild(path);
+  });
+}
+
+// ══════════════════════════════
+// SELECTION & CTX
+// ══════════════════════════════
+function selN(id){if(sel)document.getElementById(sel)?.classList.remove('sel');sel=id;if(id)document.getElementById(id)?.classList.add('sel');}
+function sctx(e){
+  e.preventDefault();const wrap=document.getElementById('wrap').getBoundingClientRect();
+  const x=(e.clientX-wrap.left-px)/sc,y=(e.clientY-wrap.top-py)/sc;
+  let found=null;
+  nodes.forEach(n=>{const el=document.getElementById(n.id);if(!el)return;const h=el.offsetHeight;if(x>=n.x&&x<=n.x+230&&y>=n.y&&y<=n.y+h)found=n.id;});
+  if(!found)return;ctxId=found;selN(found);
+  const m=document.getElementById('ctx');
+  m.innerHTML=`
+    <div class="ci" onclick="openM('${found}');hctx()">⚙ Configurar</div>
+    <div class="ci" onclick="runNode('${found}');hctx()">▶ Ejecutar</div>
+    <div class="ci" onclick="pauseNode('${found}');hctx()">⏸ Pausar</div>
+    <div class="csep"></div>
+    <div class="ci" onclick="dropOutputCard('${found}',nodes.find(n=>n.id==='${found}').x+250,nodes.find(n=>n.id==='${found}').y+20);hctx()">⬇ Dropear output card</div>
+    <div class="ci" onclick="openSkillAssign('${found}');hctx()">⬡ Asignar skill</div>
+    <div class="ci" onclick="dupN('${found}');hctx()">⧉ Duplicar</div>
+    <div class="csep"></div>
+    <div class="ci red" onclick="delSel();hctx()">✕ Eliminar</div>`;
+  m.style.cssText=`display:block;left:${e.clientX}px;top:${e.clientY}px`;
+}
+function hctx(){document.getElementById('ctx').style.display='none';}
+document.addEventListener('click',hctx);
+function dupN(id){const n=nodes.find(x=>x.id===id);if(!n)return;const nn=addNode(n.type,n.x+240,n.y+20);nn.prompt=n.prompt;}
+
+function openSkillAssign(nodeId){
+  if(!customSkills.length){glog('warn','Skills','system','No hay skills. Crea una con /skill');return;}
+  const body=document.getElementById('logbody');
+  glog('system','Skills','system',`Asignar skill a: ${nodes.find(n=>n.id===nodeId)?.name}`);
+  customSkills.forEach(sk=>{
+    const btn=document.createElement('button');
+    btn.style.cssText='display:inline-block;margin:2px 6px;padding:3px 10px;background:rgba(74,122,191,.1);border:1px solid rgba(74,122,191,.2);color:#6090c0;font-family:IBM Plex Mono,monospace;font-size:9px;border-radius:3px;cursor:pointer';
+    btn.textContent=`⬡ ${sk.name}`;
+    btn.onclick=()=>{assignSkillToNode(nodeId,sk);btn.textContent='✓ Asignada';btn.disabled=true;};
+    body.appendChild(btn);body.scrollTop=body.scrollHeight;
+  });
+}
+
+// ══════════════════════════════
+// SKILL ASSIGNMENT
+// ══════════════════════════════
+function assignSkillToNode(nodeId,skill){
+  const n=nodes.find(x=>x.id===nodeId);if(!n)return;
+  if(!n.skills)n.skills=[];
+  if(n.skills.find(s=>s.id===skill.id))return;
+  n.skills.push(skill);
+  // Re-render node with new skill rings
+  document.getElementById(nodeId)?.remove();
+  mkNode(n);drawConns();
+  glog('action',n.name,n.type,'Skill asignada: '+skill.name);
+}
+
+// ══════════════════════════════
+// DRAG FROM PALETTE
+// ══════════════════════════════
+function pd(e,type){palT=type;}
+function drop(e){
+  if(!palT)return;const wrap=document.getElementById('wrap').getBoundingClientRect();
+  addNode(palT,(e.clientX-wrap.left-px)/sc-115,(e.clientY-wrap.top-py)/sc-100);
+  palT=null;drawConns();updateMM();
+}
+
+// ══════════════════════════════
+// MODAL
+// ══════════════════════════════
+function openM(id){
+  const n=nodes.find(x=>x.id===id);if(!n)return;
+  modalId=id;const tp=T[n.type];
+  document.getElementById('mdot').style.background=tp.dot;
+  document.getElementById('mtitle').textContent=n.name;
+  const sc2={idle:'#2a2820',running:'#3a2a10',done:'#1a2a1a',error:'#2a1a1a',paused:'#1a1a2a'};
+  const sl={idle:'#706860',running:'#c8a040',done:'#3a8a3a',error:'#8a3a3a',paused:'#4a5a8a'};
+  document.getElementById('mbadge').innerHTML=`<span style="font-size:8px;padding:2px 6px;border-radius:2px;background:${sc2[n.status]};color:${sl[n.status]};font-family:'IBM Plex Mono',monospace;letter-spacing:.06em">${stlabel(n.status)}</span>`;
+  ctab='cfg';document.querySelectorAll('.mtab').forEach(t=>t.classList.remove('on'));document.querySelector('.mtab').classList.add('on');
+  renderM(n);document.getElementById('moverlay').classList.add('open');
+}
+
+function renderM(n){
+  const body=document.getElementById('mbody');const tp=T[n.type];
+  if(ctab==='cfg'){
+    body.innerHTML=`
+      <div class="fg"><div class="fl">Nombre</div><input class="fi" value="${n.name}" oninput="nodes.find(x=>x.id==='${n.id}').name=this.value;document.getElementById('mtitle').textContent=this.value;document.getElementById('${n.id}')?.querySelector('.nh-name').textContent=this.value"></div>
+      <div class="fg"><div class="fl">Prompt / Instrucciones</div><textarea class="fi" rows="5" oninput="nodes.find(x=>x.id==='${n.id}').prompt=this.value">${n.prompt||tp.prompt||''}</textarea></div>
+      <div class="fg"><div class="fl">Verificación automática</div><textarea class="fi" rows="3" oninput="nodes.find(x=>x.id==='${n.id}').verification=this.value">${n.verification||tp.verification||''}</textarea></div>
+      <div class="frow"><div class="fg"><div class="fl">Timeout (seg)</div><input class="fi" type="number" value="30"></div><div class="fg"><div class="fl">Reintentos</div><input class="fi" type="number" value="3"></div></div>
+      <div class="fg"><div class="fl">Memoria interna (archivos de contexto)</div>
+        <div style="background:#0a0808;border:1px solid rgba(255,255,255,.07);border-radius:3px;padding:8px;font-size:9px;color:#3a3630">
+          ${(n.memoryFiles||[]).map((f,i)=>`<div style="display:flex;align-items:center;gap:6px;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)"><span style="color:#706860">📄 ${f.name}</span><span style="color:#3a3630;font-size:8px">${f.size||'—'}</span><button onclick="deleteMemFile('${n.id}',${i})" style="background:transparent;border:none;color:#3a3630;cursor:pointer;margin-left:auto;font-size:10px">✕</button></div>`).join('')}
+          <button onclick="addMemFile('${n.id}')" style="background:rgba(255,255,255,.03);border:1px dashed rgba(255,255,255,.07);color:#3a3630;font-size:9px;padding:3px 8px;border-radius:2px;cursor:pointer;margin-top:4px;width:100%;font-family:'IBM Plex Mono',monospace">+ Agregar archivo de memoria</button>
+        </div>
+      </div>`;
+  } else if(ctab==='io'){
+    const inType=n.inputType||tp.inputType||'text';const outType=n.outputType||tp.outputType||'text';
+    const types=['text','image','video','json','file','audio','decision','any'];
+    body.innerHTML=`
+      <div class="fg"><div class="fl">Tipo de Input</div>
+        <div class="io-type-row">${types.map(t=>`<button class="io-type-btn ${inType===t?'on':''}" onclick="setIOType('${n.id}','input','${t}')">${IO_ICONS[t]} ${t}</button>`).join('')}</div>
+        <input class="fi" style="margin-top:6px" placeholder="Etiqueta de input" value="${n.inputLabel||tp.inputLabel||''}" oninput="nodes.find(x=>x.id==='${n.id}').inputLabel=this.value">
+        <textarea class="fi" style="margin-top:4px" rows="2" placeholder="Valor por defecto si no hay input conectado..." oninput="nodes.find(x=>x.id==='${n.id}').inputDefault=this.value">${n.inputDefault||tp.inputDefault||''}</textarea>
+      </div>
+      <div class="fg" style="margin-top:12px"><div class="fl">Tipo de Output</div>
+        <div class="io-type-row">${types.map(t=>`<button class="io-type-btn ${outType===t?'on':''}" onclick="setIOType('${n.id}','output','${t}')">${IO_ICONS[t]} ${t}</button>`).join('')}</div>
+        <input class="fi" style="margin-top:6px" placeholder="Etiqueta de output" value="${n.outputLabel||tp.outputLabel||''}" oninput="nodes.find(x=>x.id==='${n.id}').outputLabel=this.value">
+      </div>`;
+  } else if(ctab==='btns'){
+    const COLORS=[{bg:'#1a2a1a',fg:'#3a8a3a'},{bg:'#2a1a1a',fg:'#8a3a3a'},{bg:'#2a2010',fg:'#c8a040'},{bg:'#1a1a2a',fg:'#4a7abf'},{bg:'#1e1a18',fg:'#9a9088'}];
+    if(!n.customBtns)n.customBtns=tp.actions.map((a,i)=>({label:a,icon:tp.actionIcons[i]||'▶',bg:tp.actionColors[i]||'#1e1a18',fg:'#9a9088',action:''}));
+    body.innerHTML=`<div style="display:flex;justify-content:space-between;margin-bottom:9px"><span style="font-size:9px;color:#706860">Botones del agente</span><button onclick="addBtn('${n.id}')" class="runtc">+ Agregar</button></div>
+      ${n.customBtns.map((b,i)=>`
+        <div style="display:flex;align-items:center;gap:6px;padding:7px 9px;background:#0a0808;border:1px solid rgba(255,255,255,.07);border-radius:3px;margin-bottom:5px">
+          <div style="min-width:60px;height:24px;border-radius:2px;background:${b.bg};border:1px solid ${b.fg}22;display:flex;align-items:center;justify-content:center;gap:4px;font-size:9px;color:${b.fg}">${b.icon} ${b.label}</div>
+          <input style="flex:1;background:#0e0c0c;border:1px solid rgba(255,255,255,.07);border-radius:2px;padding:3px 6px;color:#ddd8cc;font-family:'IBM Plex Mono',monospace;font-size:9px;outline:none" value="${b.label}" oninput="nodes.find(x=>x.id==='${n.id}').customBtns[${i}].label=this.value">
+          <input style="width:40px;background:#0e0c0c;border:1px solid rgba(255,255,255,.07);border-radius:2px;padding:3px 6px;color:#ddd8cc;font-family:'IBM Plex Mono',monospace;font-size:10px;outline:none;text-align:center" value="${b.icon}" oninput="nodes.find(x=>x.id==='${n.id}').customBtns[${i}].icon=this.value">
+          <div style="display:flex;gap:2px">${COLORS.map((c,ci)=>`<div onclick="setButtonColor('${n.id}',${i},${ci})" style="width:14px;height:14px;border-radius:50%;background:${c.fg};cursor:pointer;border:2px solid ${b.fg===c.fg?'#fff':'transparent'};transition:.1s" title="${['Verde','Rojo','Ámbar','Azul','Gris'][ci]}"></div>`).join('')}</div>
+          <button onclick="delBtn('${n.id}',${i})" style="background:transparent;border:none;color:#3a3630;cursor:pointer;font-size:11px;padding:0 2px">✕</button>
+        </div>`).join('')}
+      <button onclick="applyBtnsToNode('${n.id}')" style="background:#c8a040;border:none;color:#1a1200;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;padding:5px 12px;border-radius:3px;cursor:pointer;width:100%;margin-top:4px">✓ Aplicar al nodo</button>`;
+  } else if(ctab==='logs'){
+    body.innerHTML=`${n.logs.map(l=>`<div class="logl"><span class="lt">${l.t}</span><span class="lm ${l.c}">${l.m}</span></div>`).join('')}`;
+  } else if(ctab==='test'){
+    body.innerHTML=`<div style="display:flex;justify-content:space-between;margin-bottom:9px"><span style="font-size:9px;color:#706860">Tests automáticos</span><button onclick="runAllTests('${n.id}')" class="runtc">▶ RUN ALL</button></div>
+      ${n.tests.map((t,i)=>`<div class="tcbox"><div class="tcrow"><span class="tcn">${t.name}</span><span class="tcs ${t.status}">${t.status.toUpperCase()}</span><button onclick="runT('${n.id}',${i})" class="runtc">▶</button></div><div style="font-size:9px;color:#706860">${t.desc}</div></div>`).join('')}
+      <button class="add-btn" onclick="nodes.find(x=>x.id==='${n.id}').tests.push({name:'Nuevo test',status:'pend',desc:'Descripción del test'});renderM(nodes.find(x=>x.id==='${n.id}'))">+ Agregar test</button>`;
+  } else if(ctab==='out'){
+    body.innerHTML=`<pre style="background:#0a0808;border:1px solid rgba(255,255,255,.07);border-radius:3px;padding:10px;font-size:9px;color:#706860;line-height:1.6;white-space:pre-wrap;overflow-wrap:break-word">${n.output||'Sin output. Ejecuta el agente primero.'}</pre>`;
+  }
+}
+function stab(el,tab){ctab=tab;document.querySelectorAll('.mtab').forEach(t=>t.classList.remove('on'));el.classList.add('on');const n=nodes.find(x=>x.id===modalId);if(n)renderM(n);}
+function closeM(){document.getElementById('moverlay').classList.remove('open');}
+function setIOType(id,dir,type){
+  const n=nodes.find(x=>x.id===id);if(!n)return;
+  if(dir==='input')n.inputType=type;else n.outputType=type;
+  // Re-render io section in node
+  const el=document.getElementById(id);if(el){const io=el.querySelector('.nio');if(io)io.outerHTML=ioSectionHTML(n);}
+  renderM(n);
+}
+function addMemFile(id){const n=nodes.find(x=>x.id===id);if(!n)return;if(!n.memoryFiles)n.memoryFiles=[];n.memoryFiles.push({name:'memoria_'+Date.now()+'.json',size:'—',content:''});renderM(n);}
+function deleteMemFile(id,i){const n=nodes.find(x=>x.id===id);if(!n||!n.memoryFiles)return;n.memoryFiles.splice(i,1);renderM(n);}
+function addBtn(id){const n=nodes.find(x=>x.id===id);if(!n)return;if(!n.customBtns)n.customBtns=[];n.customBtns.push({label:'Nuevo',icon:'▶',bg:'#1e1a18',fg:'#9a9088',action:''});renderM(n);}
+function delBtn(id,i){const n=nodes.find(x=>x.id===id);if(!n)return;n.customBtns.splice(i,1);renderM(n);}
+function setButtonColor(id,btnIdx,colorIdx){
+  const COLORS=[{bg:'#1a2a1a',fg:'#3a8a3a'},{bg:'#2a1a1a',fg:'#8a3a3a'},{bg:'#2a2010',fg:'#c8a040'},{bg:'#1a1a2a',fg:'#4a7abf'},{bg:'#1e1a18',fg:'#9a9088'}];
+  const n=nodes.find(x=>x.id===id);if(!n||!n.customBtns)return;
+  n.customBtns[btnIdx].bg=COLORS[colorIdx].bg;n.customBtns[btnIdx].fg=COLORS[colorIdx].fg;renderM(n);
+}
+function applyBtnsToNode(id){
+  const n=nodes.find(x=>x.id===id);if(!n||!n.customBtns)return;
+  const el=document.getElementById(id);if(!el)return;
+  const actSection=el.querySelector('.nactions');if(!actSection)return;
+  actSection.innerHTML=n.customBtns.map((b,i)=>`<button class="nact" style="background:${b.bg}"><div class="nact-ico" style="background:rgba(0,0,0,.3);color:${b.fg}">${b.icon}</div><span style="color:${b.fg}">${b.label}</span><div class="nstatus-dot ${i===n.customBtns.length-1?n.status:'idle'}" style="margin-left:auto"></div></button>`).join('');
+  closeM();
+}
+function runT(id,i){const n=nodes.find(x=>x.id===id);if(!n)return;n.tests[i].status='pend';renderM(n);setTimeout(()=>{n.tests[i].status=Math.random()>.3?'pass':'fail';renderM(n);},700);}
+function runAllTests(id){const n=nodes.find(x=>x.id===id);if(!n)return;n.tests.forEach((_,i)=>setTimeout(()=>runT(id,i),i*350));}
+
+// ══════════════════════════════
+// SIDEBAR
+// ══════════════════════════════
+function openSide(){document.getElementById('pside').classList.add('open');document.getElementById('pback').style.display='block';}
+function closeSide(){document.getElementById('pside').classList.remove('open');document.getElementById('pback').style.display='none';}
+function newPipeline(){const n=prompt('Nombre del nuevo pipeline:','Pipeline v1');if(n)glog('system','Pipeline','system','Creado: '+n);closeSide();}
+
+// ══════════════════════════════
+// LOG SYSTEM
+// ══════════════════════════════
+let globalLog=[];let logFilter_='all';
+function glog(type,agentName,agentType,msg){
+  const entry={id:Date.now()+Math.random(),t:ts(),agent:agentName||'Sistema',agentType:agentType||'system',type,msg};
+  globalLog.push(entry);if(globalLog.length>500)globalLog.shift();
+  renderLogEntry(entry);
+  const badge=document.getElementById('log-badge');
+  if(badge&&!operatorWaiting){badge.textContent=type==='error'?'ERROR':type==='done'?'OK':'LIVE';badge.className='ltb-badge'+(type==='warn'||type==='think'?' active':'');}
+}
+function renderLogEntry(entry){
+  if(logFilter_!=='all'&&entry.type!==logFilter_)return;
+  const body=document.getElementById('logbody');if(!body)return;
+  const div=document.createElement('div');div.className='log-entry '+entry.type+(entry.type==='think'?' typing':'');
+  div.dataset.type=entry.type;div.dataset.id=entry.id;
+  const agentColor={pilot:'#c85050',research:'#3a9a6a',prompt:'#c8a040',image:'#8a5abf',video:'#4a8abf',assembly:'#c87840',human:'#c8a040',system:'#4a4870'}[entry.agentType]||'#706860';
+  div.innerHTML=`<span class="le-time">${entry.t}</span><span class="le-agent" style="color:${agentColor}">${entry.agent.slice(0,10)}</span><span class="le-msg">${entry.msg}</span>`;
+  body.appendChild(div);
+  body.querySelectorAll('.log-entry.think.typing').forEach((el,i,arr)=>{if(i<arr.length-1)el.classList.remove('typing');});
+  body.scrollTop=body.scrollHeight;
+}
+function setLogFilter(f,el){logFilter_=f;document.querySelectorAll('.lf').forEach(x=>x.classList.remove('on'));el.classList.add('on');const body=document.getElementById('logbody');body.innerHTML='';globalLog.forEach(e=>{if(logFilter_==='all'||e.type===logFilter_)renderLogEntry(e);});}
+function clearLog(){globalLog=[];document.getElementById('logbody').innerHTML='';}
+function toggleLogMin(){const win=document.getElementById('logwin');logMinimized=!logMinimized;win.classList.toggle('minimized',logMinimized);if(!logMinimized)win.style.height=logPrevH+'px';else logPrevH=win.offsetHeight;}
+function toggleLogMax(){const win=document.getElementById('logwin');if(win.offsetHeight<300){logPrevH=win.offsetHeight;win.style.height='400px';}else win.style.height=logPrevH+'px';}
+
+// Log drag
+(function(){let dragging=false,ox=0,oy=0;const bar=document.getElementById('logtbar'),win=document.getElementById('logwin');
+  bar.addEventListener('mousedown',e=>{if(e.target.classList.contains('ltb-dot'))return;dragging=true;const r=win.getBoundingClientRect();ox=e.clientX-r.left;oy=e.clientY-r.top;e.preventDefault();});
+  document.addEventListener('mousemove',e=>{if(!dragging)return;win.style.right='auto';win.style.bottom='auto';win.style.left=Math.max(0,Math.min(window.innerWidth-win.offsetWidth,e.clientX-ox))+'px';win.style.top=Math.max(0,Math.min(window.innerHeight-win.offsetHeight,e.clientY-oy))+'px';});
+  document.addEventListener('mouseup',()=>{dragging=false;});
+})();
+(function(){let resizing=false,startY=0,startH=0;const handle=document.getElementById('logresize'),win=document.getElementById('logwin');
+  handle.addEventListener('mousedown',e=>{resizing=true;startY=e.clientY;startH=win.offsetHeight;e.preventDefault();});
+  document.addEventListener('mousemove',e=>{if(!resizing)return;win.style.height=Math.max(80,Math.min(600,startH-(e.clientY-startY)))+'px';});
+  document.addEventListener('mouseup',()=>{resizing=false;});
+})();
+
+// Log commands
+const LOG_COMMANDS={
+  pipeline:{desc:'Gestionar pipelines',actions:[{label:'Nuevo pipeline',icon:'⊕',action:()=>newPipeline()},{label:'Ver todos',icon:'≡',action:()=>openSide()},{label:'Ejecutar',icon:'▶',action:()=>runAll()}]},
+  agente:{desc:'Gestionar agentes',actions:[{label:'Crear agente con IA',icon:'✦',action:()=>openAgentBuilder()},{label:'Ver canvas',icon:'⊞',action:()=>fitAll()},{label:'Agregar Piloto',icon:'◈',action:()=>addNodeCenter('pilot')}]},
+  skill:{desc:'Gestionar skills',actions:[{label:'Crear nueva skill',icon:'⬡',action:()=>openSkillBuilder()},{label:'Ver lista de skills',icon:'≡',action:()=>listSkillsInLog()},{label:'Asignar a nodo',icon:'→',action:()=>promptAssignSkill()}]},
+  run:{desc:'Ejecutar',actions:[{label:'Run All',icon:'▶',action:()=>runAll()}]},
+  reset:{desc:'Resetear',actions:[{label:'Reset All',icon:'↺',action:()=>resetAll()}]},
+  fit:{desc:'Ajustar vista',actions:[{label:'Fit View',icon:'⊞',action:()=>fitAll()}]},
+  help:{desc:'Ayuda',actions:[{label:'Ver comandos',icon:'?',action:()=>Object.entries(LOG_COMMANDS).forEach(([k,v])=>glog('system','Help','system',`/${k} — ${v.desc}`))}]}
+};
+function listSkillsInLog(){if(!customSkills.length){glog('system','Skills','system','No hay skills. Crea una con /skill');return;}customSkills.forEach(s=>glog('action','Skills','system',`⬡ ${s.name} — ${s.type||''} — ${s.endpoint||''}`))}
+function promptAssignSkill(){if(!customSkills.length){glog('warn','Skills','system','No hay skills. Crea una primero.');return;}if(!sel){glog('warn','Skills','system','Selecciona un nodo primero.');return;}openSkillAssign(sel);}
+function parseLogCommand(){
+  const inp=document.getElementById('log-cmd');const val=inp.value.trim();if(!val)return;
+  inp.value='';document.getElementById('cmd-hints').innerHTML='';
+  glog('action','Terminal','system','> '+val);
+  const cmd=val.replace('/','').toLowerCase().trim();const match=LOG_COMMANDS[cmd];
+  if(match){
+    glog('system','Terminal','system',match.desc+':');
+    const body=document.getElementById('logbody');
+    const row=document.createElement('div');row.style.cssText='display:flex;gap:5px;padding:4px 8px;flex-wrap:wrap;';
+    match.actions.forEach(a=>{
+      const btn=document.createElement('button');
+      btn.style.cssText='padding:4px 10px;background:rgba(200,160,64,.08);border:1px solid rgba(200,160,64,.2);color:#c8a040;font-family:IBM Plex Mono,monospace;font-size:9px;border-radius:3px;cursor:pointer;letter-spacing:.04em';
+      btn.innerHTML=`${a.icon} ${a.label}`;btn.onclick=()=>a.action();
+      row.appendChild(btn);
+    });
+    body.appendChild(row);body.scrollTop=body.scrollHeight;
+  } else glog('warn','Terminal','system',`Comando desconocido: ${val}. Escribe /help`);
+}
+document.getElementById('log-cmd').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){parseLogCommand();e.preventDefault();}
+  if(e.key==='Tab'){e.preventDefault();const val=e.target.value.replace('/','');const m=Object.keys(LOG_COMMANDS).find(k=>k.startsWith(val));if(m)e.target.value='/'+m;}
+});
+document.getElementById('log-cmd').addEventListener('input',function(){
+  const val=this.value;const hints=document.getElementById('cmd-hints');
+  if(!val.startsWith('/')){hints.innerHTML='';return;}
+  const q=val.slice(1).toLowerCase();const matches=Object.entries(LOG_COMMANDS).filter(([k])=>k.startsWith(q));
+  hints.innerHTML=matches.map(([k,v])=>`<div onclick="document.getElementById('log-cmd').value='/${k}';parseLogCommand()" style="padding:5px 10px;font-size:9px;color:#706860;cursor:pointer;display:flex;gap:8px;border-bottom:1px solid rgba(255,255,255,.04);font-family:IBM Plex Mono,monospace" onmouseover="this.style.background='rgba(255,255,255,.04)'" onmouseout="this.style.background=''">${'<span style=color:#c8a040>/'+k+'</span>'} ${v.desc}</div>`).join('');
+});
+
+// ══════════════════════════════
+// AGENT BUILDER (MOCK)
+// ══════════════════════════════
+const MOCK_AGENT_FLOW=[
+  {ask:`¡Hola! Voy a ayudarte a crear un **agente personalizado**.\n\n¿Qué hace este agente?`,chips:['Investigador de tendencias','Generador de contenido','Validador de output','Distribuidor multiplataforma']},
+  {ask:`¿Cuál es el **prompt principal** — instrucciones exactas del agente?`,chips:['Buscar tendencias y rankear por engagement','Generar texto SEO optimizado','Validar formato JSON y campos','Publicar en múltiples plataformas']},
+  {ask:`Define **Meta** y **Goal** (separa con /):`,chips:['Meta: Investigar / Goal: Top 10 ideas','Meta: Crear contenido / Goal: Draft listo','Meta: Validar / Goal: JSON sin errores']},
+  {ask:`¿Cuáles son las **subtareas** internas? (2-4 pasos)`,chips:['2 subtareas','3 subtareas','4 pasos detallados']},
+  {ask:`¿Cómo **verificamos** que funcionó? Condición de éxito:`,chips:['Output JSON válido con todos los campos','Score de calidad > 7/10','Formato correcto + no vacío']},
+  {ask:`¿Qué **tipo de input** espera este agente?`,chips:['text — texto plano','json — datos estructurados','image — imagen','video — clip de video','file — archivo','any — cualquier tipo']},
+  {ask:`¿Qué **tipo de output** entrega al siguiente agente?`,chips:['text — texto procesado','json — datos estructurados','image — imagen generada','video — clip generado','file — archivo exportado']},
+  {ask:`¿Qué **skills** necesita? (MCPs u otras herramientas)`,chips:['Sin skills por ahora','web_search — búsqueda web','notion_mcp — Notion','github_mcp — GitHub','Sin skills — solo IA']},
+  {ask:`¿Qué **botones de acción** quieres en el card?`,chips:['▶ Ejecutar + ⏸ Pausar','▶ Run + ■ Stop + ↺ Reset','✓ Aprobar + ✕ Rechazar']},
+];
+const MOCK_SKILL_FLOW=[
+  {ask:`Vamos a crear una **skill**. ¿Qué tipo de superpoder le da al agente?`,chips:['MCP — integración con app externa','API HTTP REST','Script local ejecutable','Webhook — recibe/envía eventos']},
+  {ask:`¿Nombre de la skill y qué hace en una línea?`,chips:['notion_writer — escribe en Notion','twitter_scraper — tendencias','github_pusher — sube código','email_sender — envía emails']},
+  {ask:`¿Endpoint o URL del MCP/API?`,chips:['https://mcp.notion.com/sse','https://api.twitter.com/v2','https://api.github.com','URL personalizada...']},
+  {ask:`¿Qué **parámetros** recibe?`,chips:['query: string (requerido)','url + method: GET|POST','token + content: string','Sin parámetros']},
+  {ask:`¿Qué **devuelve** la skill?`,chips:['JSON con resultados','Texto plano','Array de items','Boolean éxito/fallo']},
+  {ask:`¿Requiere autenticación? ¿Rate limit?`,chips:['Sin auth — libre','API Key en header','OAuth 2.0','100 req/hora límite']},
+];
+const MOCK_TEMPLATES={
+  investig:{name:'Agente Investigador',icon:'⌕',color:'#1a4a2a',inputType:'text',outputType:'json',meta:'Busca tendencias y genera insights.',goal:'Lista top 10 ideas con score engagement.',prompt:'Investiga tendencias para el tema dado. Devuelve JSON con 10 ideas ordenadas por potencial viral.',verification:'Mínimo 5 ideas con engagement_score > 7.',subtasks:['Scrapear tendencias','Analizar engagement','Rankear por potencial'],buttons:[{icon:'⌕',label:'Buscar',bg:'#1a2a1a',fg:'#3a9a6a',action:'run'},{icon:'≡',label:'Ver lista',bg:'#121a12',fg:'#2a7a4a',action:'view'}],tests:[{name:'Input válido',desc:'Topic no vacío'},{name:'Output format',desc:'JSON con array ideas'}]},
+  default:{name:'Agente Personalizado',icon:'◆',color:'#2a2a3a',inputType:'text',outputType:'json',meta:'Procesa datos y genera output estructurado.',goal:'Output JSON para el siguiente agente.',prompt:'Recibe input del agente anterior y procesa según instrucciones.',verification:'Output JSON válido.',subtasks:['Recibir input','Procesar','Validar resultado'],buttons:[{icon:'▶',label:'Ejecutar',bg:'#1a1a2a',fg:'#6060bf',action:'run'},{icon:'⏸',label:'Pausar',bg:'#141420',fg:'#4a4a8a',action:'pause'}],tests:[{name:'Smoke test',desc:'Inicia sin errores'},{name:'Output format',desc:'Valida JSON'}]}
+};
+const MOCK_SKILL_TEMPLATES={
+  mcp:{name:'notion_mcp',icon:'📋',color:'#1a1a3a',type:'MCP',endpoint:'https://mcp.notion.com/sse',description:'Lee y escribe en Notion',params:[{name:'database_id',required:true},{name:'content',required:false}],output:'JSON con página',auth:'Bearer token',rateLimit:'100 req/h'},
+  default:{name:'custom_skill',icon:'⬡',color:'#1a2a3a',type:'API HTTP',endpoint:'https://api.ejemplo.com/v1',description:'Skill personalizada',params:[{name:'param1',required:true}],output:'JSON de respuesta',auth:'API Key',rateLimit:'Variable'}
+};
+
+function openAgentBuilder(){builderMode='agent';closeSide();_openBuilderWin('Constructor de Agente','AGENTE');if(!document.getElementById('awin-msgs').children.length)startMockConversation('agent');initAwinDrag();initAwinResize();}
+function openSkillBuilder(){builderMode='skill';closeSide();_openBuilderWin('Constructor de Skill','SKILL');document.getElementById('awin-msgs').innerHTML='';startMockConversation('skill');initAwinDrag();initAwinResize();}
+function _openBuilderWin(title,badge){const win=document.getElementById('agentwin');win.classList.add('open');document.querySelector('.awin-title').textContent=title;const b=document.getElementById('awin-badge');b.textContent=badge;b.style.color=badge==='SKILL'?'#6090c0':'#c8a040';}
+function closeAgentBuilder(){document.getElementById('agentwin').classList.remove('open');}
+function toggleAwinMin(){const win=document.getElementById('agentwin');awinMinimized=!awinMinimized;win.classList.toggle('minimized',awinMinimized);if(!awinMinimized)win.style.height=awinPrevH+'px';else awinPrevH=win.offsetHeight;}
+function toggleAwinMax(){const win=document.getElementById('agentwin');if(win.offsetHeight<400){awinPrevH=win.offsetHeight;win.style.height='560px';}else win.style.height=awinPrevH+'px';}
+function startMockConversation(mode){awinStep=0;awinBuilding={type:mode==='skill'?'skill':'custom'};document.getElementById('awin-savebar').classList.remove('show');updateAwinPreview(awinBuilding);const flow=mode==='skill'?MOCK_SKILL_FLOW:MOCK_AGENT_FLOW;renderAwinChips(flow[0].chips);setTimeout(()=>appendAiMsg(flow[0].ask),300);}
+function appendAiMsg(text,isCard,data){const msgs=document.getElementById('awin-msgs');msgs.querySelector('.typing-wrap')?.remove();const wrap=document.createElement('div');wrap.className='amsg ai';const lbl=document.createElement('div');lbl.className='amsg-label';lbl.textContent=builderMode==='skill'?'Constructor Skills':'Constructor Agentes';const bub=document.createElement('div');bub.className='amsg-bubble';bub.innerHTML=text.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>');wrap.appendChild(lbl);wrap.appendChild(bub);if(isCard&&data)wrap.appendChild(buildACard(data));msgs.appendChild(wrap);msgs.scrollTop=msgs.scrollHeight;}
+function appendUserMsg(text){const msgs=document.getElementById('awin-msgs');const wrap=document.createElement('div');wrap.className='amsg user';const lbl=document.createElement('div');lbl.className='amsg-label';lbl.textContent='Tú';const bub=document.createElement('div');bub.className='amsg-bubble';bub.textContent=text;wrap.appendChild(lbl);wrap.appendChild(bub);msgs.appendChild(wrap);msgs.scrollTop=msgs.scrollHeight;}
+function showTyping(){const msgs=document.getElementById('awin-msgs');const wrap=document.createElement('div');wrap.className='amsg ai typing-wrap';const bub=document.createElement('div');bub.className='amsg-bubble';bub.innerHTML='<div class="typing-dots"><span></span><span></span><span></span></div>';wrap.appendChild(bub);msgs.appendChild(wrap);msgs.scrollTop=msgs.scrollHeight;}
+function buildACard(data){const card=document.createElement('div');card.className='amsg-card';const isSkill=data.type==='skill'||data.endpoint;card.innerHTML=isSkill?`<div class="amsg-card-title"><div style="width:8px;height:8px;border-radius:2px;background:${data.color||'#4a7abf'};flex-shrink:0"></div>${data.name} <span style="font-size:8px;opacity:.5">${data.type}</span></div><div class="amsg-card-row"><span class="amsg-card-key">Endpoint</span><span class="amsg-card-val" style="font-size:8px">${data.endpoint||'—'}</span></div><div class="amsg-card-row"><span class="amsg-card-key">Params</span><span class="amsg-card-val">${(data.params||[]).map(p=>p.name+(p.required?'*':'')).join(', ')||'—'}</span></div><div class="amsg-card-row"><span class="amsg-card-key">Output</span><span class="amsg-card-val">${data.output||'—'}</span></div>`:
+  `<div class="amsg-card-title"><div style="width:8px;height:8px;border-radius:2px;background:${data.color||'#706860'};flex-shrink:0"></div>${data.name||'Agente'}</div><div class="amsg-card-row"><span class="amsg-card-key">Meta</span><span class="amsg-card-val">${data.meta||'—'}</span></div><div class="amsg-card-row"><span class="amsg-card-key">I/O</span><span class="amsg-card-val">${IO_ICONS[data.inputType]||'◆'} ${data.inputType||'any'} → ${IO_ICONS[data.outputType]||'◆'} ${data.outputType||'any'}</span></div><div class="amsg-card-row"><span class="amsg-card-key">Skills</span><span class="amsg-card-val">${(data.skills||[]).map(s=>s.name||s).join(', ')||'Sin skills'}</span></div><div class="amsg-card-divider"></div><div class="amsg-card-tags">${(data.buttons||[]).map(b=>`<span class="amsg-card-tag" style="background:${b.bg};color:${b.fg}">${b.icon} ${b.label}</span>`).join('')}</div>`;
+  return card;}
+function renderAwinChips(chips){const c=document.getElementById('awin-chips');c.innerHTML=chips.map(ch=>`<button class="aqchip${ch.includes('✦')||ch.includes('Guardar')?'  gold':''}" onclick="chipClick(this.textContent)">${ch}</button>`).join('');}
+function chipClick(text){document.getElementById('awin-input').value=text;sendAwinMsg();}
+function awinKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendAwinMsg();}}
+function sendAwinMsg(){
+  const inp=document.getElementById('awin-input');const text=inp.value.trim();if(!text||awinTyping)return;
+  inp.value='';inp.style.height='auto';appendUserMsg(text);document.getElementById('awin-chips').innerHTML='';
+  awinTyping=true;document.getElementById('awin-send').disabled=true;document.getElementById('awin-badge').textContent='...';showTyping();
+  setTimeout(()=>processMock(text),600+Math.random()*300);
+}
+function processMock(userText){
+  awinTyping=false;document.getElementById('awin-send').disabled=false;
+  const flow=builderMode==='skill'?MOCK_SKILL_FLOW:MOCK_AGENT_FLOW;
+  if(builderMode==='agent'){
+    if(awinStep===0)awinBuilding._rawDesc=userText;
+    if(awinStep===1)awinBuilding.prompt=userText;
+    if(awinStep===5)awinBuilding.inputType=userText.split('—')[0].trim().split(' ')[0];
+    if(awinStep===6)awinBuilding.outputType=userText.split('—')[0].trim().split(' ')[0];
+    if(awinStep===7)awinBuilding._rawSkills=userText;
+  } else {
+    if(awinStep===0)awinBuilding._rawType=userText;
+    if(awinStep===1)awinBuilding.name=userText.split('—')[0].trim();
+    if(awinStep===2)awinBuilding.endpoint=userText;
+  }
+  awinStep++;document.getElementById('awin-badge').textContent=builderMode==='skill'?'SKILL':'AGENTE';
+  updateAwinPreview(awinBuilding);
+  if(awinStep<flow.length){appendAiMsg(flow[awinStep].ask);setTimeout(()=>renderAwinChips(flow[awinStep].chips),50);}
+  else finalizeMock();
+}
+function finalizeMock(){
+  let final;
+  if(builderMode==='agent'){
+    const desc=(awinBuilding._rawDesc||'').toLowerCase();
+    const tpl=(desc.includes('investig')||desc.includes('trend'))?MOCK_TEMPLATES.investig:MOCK_TEMPLATES.default;
+    final={...tpl,...awinBuilding};final.skills=[];
+    const rawSkills=awinBuilding._rawSkills||'';
+    if(rawSkills.includes('notion'))final.skills.push({id:'notion_mcp',name:'notion_mcp',color:'#1a1a3a'});
+    if(rawSkills.includes('web_search')||rawSkills.includes('twitter'))final.skills.push({id:'web_search',name:'web_search',color:'#1a2a3a'});
+    if(!rawSkills.includes('Sin')){}
+  } else {
+    const rt=(awinBuilding._rawType||'').toLowerCase();
+    const tpl=rt.includes('mcp')?MOCK_SKILL_TEMPLATES.mcp:MOCK_SKILL_TEMPLATES.default;
+    final={...tpl,...awinBuilding,type:'skill'};
+  }
+  Object.assign(awinBuilding,final);updateAwinPreview(awinBuilding);
+  appendAiMsg(`¡Listo! Aquí está la ${builderMode==='skill'?'skill':'agente'} completa. ¿Todo correcto? Puedes guardarla o pedirme ajustes.`,true,awinBuilding);
+  renderAwinChips(['✦ Guardar','Cambiar nombre','Ajustar prompt','Cambiar I/O','Descartar']);
+  document.getElementById('awin-savebar').classList.add('show');
+  document.querySelector('.awin-save-btn').textContent=`✦ Guardar ${builderMode==='skill'?'skill':'agente'} en biblioteca`;
+}
+function updateAwinPreview(data){
+  const dot=document.getElementById('awp-dot');const name=document.getElementById('awp-name');const chips=document.getElementById('awp-chips');
+  if(dot)dot.style.background=data.color||'#706860';if(name)name.textContent=data.name||'Nuevo...';
+  if(chips){
+    const isSkill=builderMode==='skill';
+    const fields=isSkill?[{k:'endpoint',l:'endpoint'},{k:'params',l:'params'},{k:'output',l:'output'}]:[{k:'prompt',l:'prompt'},{k:'inputType',l:'input type'},{k:'outputType',l:'output type'},{k:'tests',l:'tests'}];
+    chips.innerHTML=fields.map(f=>{const v=data[f.k];const ok=Array.isArray(v)?v.length>0:!!v;return`<span class="awp-chip ${ok?'ok':''}">${f.l} ${ok?'✓':'—'}</span>`;}).join('');
+  }
+}
+function saveCustomAgent(){
+  if(!awinBuilding.name&&!awinBuilding.type){appendAiMsg('Aún no hay nada para guardar. Continúa la conversación.');return;}
+  if(builderMode==='skill'){
+    const id='skill_'+Date.now();const skill={...awinBuilding,id,savedAt:new Date().toISOString()};
+    let saved=[];try{saved=JSON.parse(localStorage.getItem('agentOS_customSkills')||'[]');}catch(e){}
+    saved.push(skill);localStorage.setItem('agentOS_customSkills',JSON.stringify(saved));
+    customSkills.push(skill);appendSkillToSidebar(skill);
+    appendAiMsg(`✦ Skill **${skill.name}** guardada. Asígnala a cualquier agente desde el menú contextual.`);
+  } else {
+    const id='custom_'+Date.now();const agent={...awinBuilding,id,savedAt:new Date().toISOString()};
+    let saved=[];try{saved=JSON.parse(localStorage.getItem('agentOS_customAgents')||'[]');}catch(e){}
+    saved.push(agent);localStorage.setItem('agentOS_customAgents',JSON.stringify(saved));
+    appendCustomAgentToSidebar(agent);
+    T[id]={label:agent.name,icon:agent.icon||'◆',hbg:darken2(agent.color||'#3a3028',1.2),hbg2:darken2(agent.color||'#3a3028',0.8),dot:agent.color||'#706860',meta:agent.meta||'',goal:agent.goal||'',subtasks:agent.subtasks||[],actions:(agent.buttons||[]).map(b=>b.label),actionIcons:(agent.buttons||[]).map(b=>b.icon),actionColors:(agent.buttons||[]).map(b=>b.bg||'#1e1a18'),vis:'tasks',cond:false,prompt:agent.prompt||'',verification:agent.verification||'',inputType:agent.inputType||'text',outputType:agent.outputType||'json',inputLabel:agent.inputLabel||'Input',outputLabel:agent.outputLabel||'Output',inputDefault:agent.inputDefault||''};
+    appendAiMsg(`✓ Agente **${agent.name}** guardado. Disponible en el panel lateral.`);
+    glog('done','Builder','system','Agente guardado: '+agent.name);
+  }
+  document.getElementById('awin-savebar').classList.remove('show');
+  setTimeout(()=>{document.getElementById('awin-msgs').innerHTML='';awinBuilding={};updateAwinPreview({});startMockConversation(builderMode);},2000);
+}
+function discardAgent(){awinBuilding={};document.getElementById('awin-savebar').classList.remove('show');document.getElementById('awin-msgs').innerHTML='';updateAwinPreview({});startMockConversation(builderMode);}
+function darken2(hex,factor){try{const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);return`rgb(${Math.min(255,Math.floor(r*factor))},${Math.min(255,Math.floor(g*factor))},${Math.min(255,Math.floor(b*factor))})`;}catch{return hex;}}
+function appendCustomAgentToSidebar(agent){const list=document.getElementById('custom-agents-list');if(!list)return;const div=document.createElement('div');div.className='ps-agent';div.draggable=true;div.innerHTML=`<div class="ps-adot" style="background:${agent.color||'#706860'}"></div>${agent.name}`;div.addEventListener('dragstart',e=>pd(e,agent.id));list.appendChild(div);}
+function appendSkillToSidebar(skill){const list=document.getElementById('custom-skills-list');if(!list)return;const div=document.createElement('div');div.className='ps-agent';div.style.cssText='cursor:pointer;border-left:2px solid #4a7abf;padding-left:6px';div.innerHTML=`<div class="ps-adot" style="background:#4a7abf;border-radius:50%"></div><span style="color:#6090c0">${skill.name}</span>`;div.onclick=()=>glog('system','Skills','system',`${skill.name}: ${skill.description||''}  |  ${skill.endpoint||''}`);list.appendChild(div);}
+function loadFromStorage(){
+  let agents=[];try{agents=JSON.parse(localStorage.getItem('agentOS_customAgents')||'[]');}catch(e){}
+  agents.forEach(a=>{appendCustomAgentToSidebar(a);T[a.id]={label:a.name,icon:a.icon||'◆',hbg:darken2(a.color||'#3a3028',1.2),hbg2:darken2(a.color||'#3a3028',0.8),dot:a.color||'#706860',meta:a.meta||'',goal:a.goal||'',subtasks:a.subtasks||[],actions:(a.buttons||[]).map(b=>b.label),actionIcons:(a.buttons||[]).map(b=>b.icon),actionColors:(a.buttons||[]).map(b=>b.bg||'#1e1a18'),vis:'tasks',cond:false,prompt:a.prompt||'',verification:a.verification||'',inputType:a.inputType||'text',outputType:a.outputType||'json',inputLabel:a.inputLabel||'Input',outputLabel:a.outputLabel||'Output',inputDefault:a.inputDefault||''};});
+  let skills=[];try{skills=JSON.parse(localStorage.getItem('agentOS_customSkills')||'[]');}catch(e){}
+  customSkills=skills;skills.forEach(s=>appendSkillToSidebar(s));
+}
+
+// Awin drag & resize
+let _ad=false,_ar=false;
+function initAwinDrag(){if(_ad)return;_ad=true;let dr=false,ox=0,oy=0;const bar=document.getElementById('awin-bar'),win=document.getElementById('agentwin');bar.addEventListener('mousedown',e=>{if(e.target.classList.contains('ltb-dot'))return;dr=true;const r=win.getBoundingClientRect();ox=e.clientX-r.left;oy=e.clientY-r.top;e.preventDefault();});document.addEventListener('mousemove',e=>{if(!dr)return;win.style.left=Math.max(0,Math.min(window.innerWidth-win.offsetWidth,e.clientX-ox))+'px';win.style.top=Math.max(0,Math.min(window.innerHeight-win.offsetHeight,e.clientY-oy))+'px';win.style.bottom='auto';win.style.right='auto';});document.addEventListener('mouseup',()=>{dr=false;});}
+function initAwinResize(){if(_ar)return;_ar=true;let rs=false,sY=0,sH=0;const h=document.getElementById('awin-resize'),win=document.getElementById('agentwin');h.addEventListener('mousedown',e=>{rs=true;sY=e.clientY;sH=win.offsetHeight;e.preventDefault();});document.addEventListener('mousemove',e=>{if(!rs)return;win.style.height=Math.max(200,Math.min(700,sH-(e.clientY-sY)))+'px';awinPrevH=win.offsetHeight;});document.addEventListener('mouseup',()=>{rs=false;});}
+
+// ══════════════════════════════
+// MINIMAP
+// ══════════════════════════════
+function updateMM(){
+  const cv=document.getElementById('mmc');const c=cv.getContext('2d');c.clearRect(0,0,140,85);c.fillStyle='#0a0808';c.fillRect(0,0,140,85);
+  const sx=140/6000,sy=85/5000;
+  nodes.forEach(n=>{const tp=T[n.type];c.fillStyle=tp.dot+'55';c.globalAlpha=.6;const el=document.getElementById(n.id);c.fillRect(n.x*sx,n.y*sy,230*sx,(el?.offsetHeight||160)*sy);});
+  outputCards.forEach(oc=>{c.fillStyle='#c8a04033';c.globalAlpha=.4;c.fillRect(oc.x*sx,oc.y*sy,200*sx,100*sy);});
+  c.globalAlpha=.3;c.strokeStyle='#c8a040';c.lineWidth=.7;c.strokeRect((-px/sc)*sx,(-py/sc)*sy,(window.innerWidth/sc)*sx,(window.innerHeight/sc)*sy);c.globalAlpha=1;
+}
+
+// ══════════════════════════════
+// KEYBOARD
+// ══════════════════════════════
+document.addEventListener('keydown',e=>{
+  if((e.key==='Delete'||e.key==='Backspace')&&document.activeElement===document.body)delSel();
+  if(e.key==='Escape'){connMode=false;connFrom=null;document.getElementById('connbtn').classList.remove('act');document.getElementById('tc').style.display='none';closeM();closeExpand();closeAgentBuilder();}
+  if(e.key==='f'||e.key==='F')fitAll();
+  if(e.key==='r'||e.key==='R')runAll();
+});
+
+// ══════════════════════════════
+// INIT
+// ══════════════════════════════
+(function(){
+  const rs=addNode('research',60,80);
+  const hm=addNode('human',360,80);
+  const pl=addNode('pilot',640,30);
+  const pr=addNode('prompt',920,30);
+  const im=addNode('image',60,420);
+  const vi=addNode('video',360,420);
+  const as=addNode('assembly',660,420);
+
+  hm.name='Operador — Aprobar idea';
+  as.name='Agente Ensamblaje';
+
+  conns.push({from:rs.id,fp:'out',to:hm.id,tp:'in',active:false});
+  conns.push({from:hm.id,fp:'out-y',to:pl.id,tp:'in',active:false,cond:true,condT:'yes'});
+  conns.push({from:hm.id,fp:'out-n',to:rs.id,tp:'in',active:false,cond:true,condT:'no'});
+  conns.push({from:pl.id,fp:'out',to:pr.id,tp:'in',active:false});
+  conns.push({from:pr.id,fp:'out',to:im.id,tp:'in',active:false});
+  conns.push({from:im.id,fp:'out',to:vi.id,tp:'in',active:false});
+  conns.push({from:vi.id,fp:'out',to:as.id,tp:'in',active:false});
+
+  setTimeout(()=>{drawConns();fitAll();updateMM();},120);
+  setTimeout(()=>{
+    glog('system','Pipeline','system','Video Pipeline v1 inicializado');
+    glog('system','Pipeline','system','7 agentes cargados. Presiona ▶ EJECUTAR');
+    glog('think','Pipeline','system','Analizando dependencias del pipeline...');
+    glog('system','Pipeline','system','Escribe /help para ver comandos disponibles');
+  },350);
+  loadFromStorage();
+})();
+applyT();
+</script>
+</body>
+</html>
