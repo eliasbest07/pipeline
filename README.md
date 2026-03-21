@@ -1,7 +1,9 @@
 # Total-time / Pipeline
-<img width="1397" height="1267" alt="Screenshot from 2026-03-21 18-31-43" src="https://github.com/user-attachments/assets/ad71ba86-b9e0-4075-962d-c38c4eaec709" />
-<img width="1397" height="1267" alt="Screenshot from 2026-03-21 18-31-34" src="https://github.com/user-attachments/assets/ff5e78c0-b143-4164-b47a-fdba15508d46" />
 <img width="1397" height="1267" alt="Screenshot from 2026-03-21 18-31-27" src="https://github.com/user-attachments/assets/1c97bb98-e6a6-4d2b-8831-abff2dfd9072" />
+
+<img width="1397" height="1267" alt="Screenshot from 2026-03-21 18-31-34" src="https://github.com/user-attachments/assets/ff5e78c0-b143-4164-b47a-fdba15508d46" />
+
+<img width="1397" height="1267" alt="Screenshot from 2026-03-21 18-35-40" src="https://github.com/user-attachments/assets/396f107a-172e-4353-a3a7-a029a3cfd7be" />
 
 > **Orquestación visual de agentes de IA para equipos de produccion**
 
