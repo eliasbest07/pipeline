@@ -1,0 +1,55 @@
+{
+  "_info": "Configuración global del sistema Pipeline OS. Aplica a todos los pipelines salvo que la semilla template lo sobreescriba.",
+
+  "version": "1.0",
+
+  "concurrencia": {
+    "max_workers_global": 5,
+    "max_workers_por_agente": {
+      "AG-03": 4,
+      "AG-04": 2,
+      "AG-06": 2,
+      "AG-07": 1
+    },
+    "max_nivel_orquestador": 2
+  },
+
+  "prioridades": {
+    "niveles": ["critical", "high", "normal", "low"],
+    "descripcion": {
+      "critical": "Bloquea el pipeline si no se resuelve. Va al frente de toda la cola.",
+      "high":     "Importante pero no bloqueante. Se ejecuta antes que normal y low.",
+      "normal":   "Prioridad por defecto para todas las tareas del pipeline.",
+      "low":      "Tareas opcionales o de enriquecimiento que pueden esperar."
+    },
+    "orden_ejecucion": "critical → high → normal → low",
+    "comportamiento_interrupcion": "una tarea de mayor prioridad solo toma un worker libre — nunca cancela una tarea en ejecución"
+  },
+
+  "cola": {
+    "tipo": "priority_queue",
+    "descripcion": "Cola ordenada por prioridad. Dentro del mismo nivel, orden FIFO.",
+    "reordenamiento_dinamico": true,
+    "max_tareas_en_cola": 50
+  },
+
+  "politica_fallos_default": "tolerante",
+
+  "reintentos": {
+    "max_por_tarea": 2,
+    "espera_entre_reintentos_segundos": [5, 15]
+  },
+
+  "timeouts": {
+    "tarea_escritura_segundos": 30,
+    "tarea_imagen_segundos": 60,
+    "tarea_audio_segundos": 120,
+    "tarea_browser_segundos": 45,
+    "tarea_api_segundos": 20
+  },
+
+  "escritura_contexto": {
+    "modelo": "particion_por_bloque",
+    "descripcion": "Cada worker escribe solo en su partición reservada. El Orquestador consolida. El Piloto es dueño de la raíz."
+  }
+}
