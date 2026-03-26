@@ -63,7 +63,14 @@ const T={
     inputType:'video',inputLabel:'Array de clips MP4',inputDefault:'Combina con clips de prueba del pipeline',
     outputType:'video',outputLabel:'Video final compilado',
     prompt:'Ensambla clips en orden. Transiciones fluidas. 30-130 segundos.',
-    verification:'Duración en rango, transiciones correctas, orden del guión.'}
+    verification:'Duración en rango, transiciones correctas, orden del guión.'},
+  seed:{label:'Semilla',icon:'◉',hbg:'#3a2800',hbg2:'#251a00',dot:'#c8a040',
+    meta:'Prompt inicial del pipeline.',goal:'',
+    subtasks:[],actions:[],actionIcons:[],actionColors:[],
+    vis:'seed',cond:false,
+    inputType:'text',inputLabel:'',inputDefault:'',
+    outputType:'text',outputLabel:'Prompt inicial',
+    prompt:'',verification:''}
 };
 
 // IO type icons and labels
@@ -102,6 +109,8 @@ let customSkills=[],builderMode='agent';
 let awinStep=0,awinBuilding={},awinTyping=false,awinPrevH=520,awinMinimized=false;
 let logFilter='all',logPrevH=420,logMinimized=false;
 let operatorWaiting=false;
+let _pendingSeedPrompt=null;
+let _userStartedRun=false; // true only when user explicitly pressed Ejecutar
 
 const IMGS=[
   'data:image/svg+xml,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 230 90"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#120824"/><stop offset="60%" stop-color="#080e24"/><stop offset="100%" stop-color="#1a0818"/></linearGradient></defs><rect width="230" height="90" fill="url(#g)"/><circle cx="115" cy="45" r="24" fill="none" stroke="rgba(130,80,200,.3)" stroke-width="1"/><text x="115" y="82" font-size="7" fill="rgba(255,255,255,.15)" text-anchor="middle" font-family="monospace">ESCENA_01.png</text></svg>`),
@@ -147,6 +156,7 @@ function fitAll(){
 // NODE BUILD
 // ══════════════════════════════
 function ioSectionHTML(n){
+  if(n.type==='seed')return`<div class="nio"><div class="nio-half" style="width:100%;border-right:none"><div class="nio-lbl" style="color:#c8a04088">Entrega</div><div class="nio-type"><span class="nio-icon" style="color:#c8a040">✦</span><span style="color:#c8a040">text</span></div><div style="font-size:9px;color:#706860;margin-top:2px">Prompt inicial</div></div></div>`;
   const tp=T[n.type];
   const inType=n.inputType||tp.inputType||'any';
   const outType=n.outputType||tp.outputType||'any';
@@ -200,6 +210,7 @@ function visHTML(n){
     return`<div class="nvis"><div class="nvis-timeline"><div style="font-size:7px;color:#3a3630;margin-bottom:2px">PROGRESO — ${pct}%</div><div class="ntl-bar"><div class="ntl-fill" style="width:${pct}%;background:${clr}30;border-right:2px solid ${clr}"></div></div><div class="ntl-clips">${clips.map(c=>`<div class="ntl-clip" style="background:${clr}10;border:1px solid ${clr}25">${c}</div>`).join('')}</div></div></div>`;
   }
   if(tp.vis==='human')return`<div class="nvis"><div class="happrove"><div class="happrove-lbl">Operador tactico activo</div><div style="font-size:9px;color:#706860;margin-top:6px">Escucha feedback, adapta prompts y coordina regeneraciones sin detener la linea.</div></div></div>`;
+  if(tp.vis==='seed')return`<div class="nvis"><div class="nvis-seed"><div class="nvis-seed-lbl">Prompt inicial</div><div class="nvis-seed-txt">${n.promptOut||n.name||'…'}</div></div></div>`;
   return'';
 }
 
@@ -211,7 +222,7 @@ function actionsHTML(n){
 
 function mkNode(n){
   const tp=T[n.type];
-  const el=document.createElement('div');el.className='node';el.id=n.id;
+  const el=document.createElement('div');el.className='node';el.id=n.id;el.dataset.type=n.type;
   el.style.cssText=`left:${n.x}px;top:${n.y}px;overflow:visible`;
   const hasCond=tp.cond;
 
@@ -239,6 +250,7 @@ function mkNode(n){
           <button class="nc" onclick="stopNode('${n.id}')" style="color:#8a3a3a" title="Stop">■</button>
           <button class="nc" onclick="openM('${n.id}')" title="Config">⚙</button>
         </div>
+        <div class="nh-model">${modelSelectHTML(n)}</div>
       </div>
       <div style="background:#0f0d0c">
         ${ioSectionHTML(n)}
@@ -249,6 +261,8 @@ function mkNode(n){
         <div class="nfoot">
           <span class="nfoot-st" id="fst_${n.id}">${stlabel(n.status)}</span>
           <button class="nfoot-sk" id="fsk_${n.id}" onclick="event.stopPropagation();openSkillAdapt('${n.id}')" style="display:${n.skills&&n.skills.length?'inline-flex':'none'}">⬡ SKILLS</button>
+          ${n.type==='pilot'?`<button class="nfoot-ctx" onclick="event.stopPropagation();openContextCard(currentPipelineId)" title="Ver archivo de contexto del pipeline">⬡ contexto</button>`:''}
+          <button class="nfoot-out" onclick="event.stopPropagation();(function(){var _n=nodes.find(function(x){return x.id==='${n.id}'});if(_n)dropOutputCard('${n.id}',_n.x+260,_n.y+20);})()" title="Soltar output card">↗ output</button>
           <button class="nfoot-cfg" onclick="openM('${n.id}')">⚙ CONFIG</button>
         </div>
       </div>
@@ -284,10 +298,62 @@ function mkNode(n){
   document.getElementById('canvas').appendChild(el);
 }
 
+// Default model per agent type (cheap/test mode)
+const DEFAULT_MODEL={
+  pilot:'claude-haiku-4-5',
+  research:'claude-haiku-4-5',
+  human:'claude-haiku-4-5',
+  prompt:'claude-haiku-4-5',
+  assembly:'claude-haiku-4-5',
+  image:'flux-schnell',
+  video:'minimax-video',
+  seed:'claude-haiku-4-5'
+};
+
+// Model options grouped per capability class
+const MODEL_GROUPS={
+  text:[
+    {group:'Anthropic',models:['claude-haiku-4-5','claude-sonnet-4-6','claude-opus-4-6']},
+    {group:'OpenAI',   models:['gpt-4o-mini','gpt-4o']},
+    {group:'Google',   models:['gemini-2.0-flash','gemini-1.5-pro']}
+  ],
+  image:[
+    {group:'Black Forest Labs',models:['flux-schnell','flux-dev','flux-pro']},
+    {group:'OpenAI',           models:['dall-e-3']},
+    {group:'Stability AI',     models:['stable-diffusion-3','stable-diffusion-ultra']},
+    {group:'Google',           models:['imagen-3']}
+  ],
+  video:[
+    {group:'Minimax',  models:['minimax-video']},
+    {group:'Kling',    models:['kling-v1','kling-v1-5']},
+    {group:'Runway',   models:['runway-gen3']},
+    {group:'Luma',     models:['luma-dream-machine']}
+  ]
+};
+
+function modelCapClass(type){
+  if(type==='image')return'image';
+  if(type==='video')return'video';
+  return'text';
+}
+
+function modelSelectHTML(n){
+  const cap=modelCapClass(n.type);
+  const groups=MODEL_GROUPS[cap];
+  const current=n.model||DEFAULT_MODEL[n.type]||groups[0].models[0];
+  const opts=groups.map(g=>
+    `<optgroup label="${g.group}">`+
+    g.models.map(m=>`<option value="${m}"${m===current?' selected':''}>${m}</option>`).join('')+
+    `</optgroup>`
+  ).join('');
+  return`<select class="n-model-sel" id="msel_${n.id}" onchange="event.stopPropagation();setNodeModel('${n.id}',this.value)" onclick="event.stopPropagation()">${opts}</select>`;
+}
+
 function addNode(type,x,y){
   const tp=T[type]||{};
   const n={id:'n'+Math.random().toString(36).slice(2,10),type,x,y,name:tp.label||type,
     status:'idle',img:null,promptOut:null,output:'',meta:'',goal:'',
+    model:DEFAULT_MODEL[type]||'claude-haiku-4-5',
     inputType:tp.inputType,outputType:tp.outputType,
     inputLabel:tp.inputLabel,outputLabel:tp.outputLabel,
     inputDefault:tp.inputDefault,
@@ -297,14 +363,32 @@ function addNode(type,x,y){
   };
   nodes.push(n);mkNode(n);updateMM();return n;
 }
+
+function setNodeModel(id,model){
+  const n=nodes.find(x=>x.id===id);if(!n)return;
+  n.model=model;
+  scheduleSave();
+  glog('action',n.name,n.type,'◈ Modelo: '+model);
+}
 function addNodeCenter(type){addNode(type,(window.innerWidth/2-px)/sc-115,(window.innerHeight/2-py)/sc-120);}
 
 // ══════════════════════════════
 // OUTPUT CARDS (dropped by agents)
 // ══════════════════════════════
 function dropOutputCard(fromNodeId, x, y, extra={}){
-  const n=nodes.find(x=>x.id===fromNodeId);if(!n)return;
-  glog('warn',n.name,n.type,'Las output cards ahora se crean solo desde eventos reales y contexto persistido.');
+  const n=nodes.find(n=>n.id===fromNodeId);if(!n)return;
+  const tp=T[n.type];if(!tp)return;
+  // Don't duplicate: one output card per node
+  if(outputCards.find(oc=>oc.fromNodeId===n.id&&oc.assetId==='drop-'+n.id)){
+    glog('warn',n.name,n.type,'Output card ya existe. Conéctala al siguiente agente.');return;
+  }
+  const outputType=n.outputType||tp.outputType||'json';
+  const content=generateMockContent(n,outputType);
+  const oc={id:'oc'+Math.random().toString(36).slice(2,10),assetId:'drop-'+n.id,
+    fromNodeId:n.id,fromNodeName:n.name,fromDot:tp.dot||'#888',
+    type:outputType,label:tp.outputLabel||tp.label+' · output',content,x,y,...extra};
+  outputCards.push(oc);mkOutputCard(oc);drawConns();
+  glog('action',n.name,n.type,`↗ Output card soltada — tipo: ${outputType}. Conecta el puerto al siguiente agente.`);
 }
 
 function generateMockContent(n,type){
@@ -316,6 +400,233 @@ function generateMockContent(n,type){
   return n.output||'Output del agente';
 }
 
+function mkSeedCard(promptText,x,y){
+  const id='seed'+Math.random().toString(36).slice(2,8);
+  const oc={id,x,y,type:'text',content:promptText,fromNodeName:'Usuario',fromDot:'#c8a040',label:'Prompt inicial'};
+  outputCards.push(oc);
+  const el=document.createElement('div');
+  el.className='output-card seed-input-card';el.id=id;
+  el.style.cssText=`left:${x}px;top:${y}px`;
+  el.innerHTML=`
+    <div class="oc-inner">
+      <div class="oc-header">
+        <div class="oc-from"><div class="oc-from-dot" style="background:#c8a040"></div><span>Usuario</span></div>
+        <span class="oc-type text">✦ text</span>
+      </div>
+      <div class="oc-body">
+        <div class="sic-title">Prompt inicial</div>
+        <div class="oc-preview-txt sic-prompt">${promptText}</div>
+      </div>
+      <div class="oc-footer">
+        <span class="oc-size" style="color:#c8a04088">text input</span>
+        <div class="oc-connect-port" data-nid="${id}" data-pt="out" title="Conectar al agente"></div>
+      </div>
+    </div>`;
+  el.addEventListener('mousedown',e=>cardMouseDown(e,id));
+  el.querySelector('.oc-connect-port').addEventListener('mousedown',e=>{
+    e.stopPropagation();setConnFrom({nid:id,pt:'out',src:'card'});
+  });
+  document.getElementById('canvas').appendChild(el);
+  return oc;
+}
+
+// ── CONTEXT FILE CARD ──────────────────────────────────────────
+function mkContextCard(pipelineId, ctx, x, y){
+  const id='ctxfile_'+pipelineId.replace(/[^a-z0-9]/gi,'_');
+  document.getElementById(id)?.remove();
+  outputCards=outputCards.filter(c=>c.id!==id);
+
+  const pipeName=(ctx?.pipeline_name||pipelineId).replace(/_/g,' ');
+  const fullJson=JSON.stringify(ctx||{},null,2);
+
+  // Build rows from all scalar top-level fields
+  const SKIP_KEYS=new Set(['pipeline_name','bloques','agentes_activos','assets','logs','_meta']);
+  const estadoColors={en_progreso:'#c8a040',completo:'#5acd6a',pausado:'#7888b8',cancelado:'#d06060',iniciando:'#7ec89a',vacío:'#3a3830'};
+  const fields=Object.entries(ctx||{})
+    .filter(([k,v])=>!SKIP_KEYS.has(k)&&(typeof v==='string'||typeof v==='number'||typeof v==='boolean'))
+    .slice(0,8);
+  const bloques=Object.keys(ctx?.bloques||{}).length;
+  const assets=Object.keys(ctx?.assets||{}).length;
+
+  let rowsHtml='';
+  if(fields.length===0&&bloques===0){
+    rowsHtml='<div class="ctx-empty-msg">el piloto completará esta estructura</div>';
+  } else {
+    fields.forEach(([k,v])=>{
+      const val=String(v);
+      const display=val.length>30?val.slice(0,27)+'…':val;
+      const color=k==='estado'?(estadoColors[val]||'#9a8a70'):'';
+      rowsHtml+=`<div class="ctx-row"><span class="ctx-lbl">${k}</span><span class="ctx-val"${color?` style="color:${color}"`:''}>${display}</span></div>`;
+    });
+    if(bloques>0)rowsHtml+=`<div class="ctx-row"><span class="ctx-lbl">bloques</span><span class="ctx-val">${bloques}</span></div>`;
+    if(assets>0)rowsHtml+=`<div class="ctx-row"><span class="ctx-lbl">assets</span><span class="ctx-val">${assets}</span></div>`;
+  }
+
+  const oc={id,x,y,type:'ctx-file',isCtxFile:true,pipelineId,
+    fromNodeName:'Pipeline',fromDot:'#4a7a9a',label:'context.json',
+    content:fullJson,_ctx:ctx};
+  outputCards.push(oc);
+
+  const el=document.createElement('div');
+  el.className='output-card ctx-file-card';el.id=id;
+  el.style.cssText=`left:${x}px;top:${y}px`;
+  el.innerHTML=`
+    <div class="oc-inner">
+      <div class="ctx-file-hd">
+        <div class="ctx-file-icon">⬡</div>
+        <div class="ctx-file-titles">
+          <div class="ctx-file-name">context.json</div>
+          <div class="ctx-file-pipe">${pipeName}</div>
+        </div>
+        <button class="ctx-refresh" onclick="event.stopPropagation();refreshContextCard('${id}','${pipelineId}')" title="Actualizar">↺</button>
+      </div>
+      <div class="ctx-file-body">${rowsHtml}</div>
+      <div class="ctx-file-ft">
+        <button class="ctx-edit-btn" onclick="event.stopPropagation();expandContextCard('${id}')">⤢ ver / editar completo</button>
+      </div>
+    </div>`;
+
+  el.addEventListener('mousedown',e=>cardMouseDown(e,id));
+  document.getElementById('canvas').appendChild(el);
+  return oc;
+}
+
+// ── QUESTION CARD (operator drops this to ask user) ──────────────
+function mkQuestionCard(opts){
+  // opts: {question, suggestion, timeout, pipelineId, fieldKey, onAnswer, x, y}
+  const id='qcard_'+Date.now();
+  const timeout=opts.timeout||20000;
+  const x=opts.x||300, y=opts.y||160;
+
+  // Remove existing question card for same fieldKey
+  if(opts.fieldKey){
+    outputCards.filter(c=>c.isQuestionCard&&c.fieldKey===opts.fieldKey)
+      .forEach(c=>{document.getElementById(c.id)?.remove();});
+    outputCards=outputCards.filter(c=>!(c.isQuestionCard&&c.fieldKey===opts.fieldKey));
+  }
+
+  const oc={id,x,y,type:'question',isQuestionCard:true,
+    fieldKey:opts.fieldKey,pipelineId:opts.pipelineId,
+    _suggestion:opts.suggestion,_onAnswer:opts.onAnswer};
+  outputCards.push(oc);
+
+  const safeQ=(opts.question||'').replace(/</g,'&lt;');
+  const safeSug=(opts.suggestion||'—').replace(/</g,'&lt;');
+  const safeSugVal=(opts.suggestion||'').replace(/'/g,"\\'");
+
+  const el=document.createElement('div');
+  el.className='output-card question-card';el.id=id;
+  el.style.cssText=`left:${x}px;top:${y}px`;
+  el.innerHTML=`
+    <div class="oc-inner">
+      <div class="qcard-hd">
+        <div class="qcard-icon">◎</div>
+        <div class="qcard-title">Operador — requiere input</div>
+      </div>
+      <div class="qcard-body">
+        <div class="qcard-q">${safeQ}</div>
+        <div class="qcard-suggest-lbl">sugerencia — se asumirá si no respondes</div>
+        <div class="qcard-suggest" id="qsug_${id}" onclick="document.getElementById('qinput_${id}').value='${safeSugVal}';document.getElementById('qinput_${id}').focus()">${safeSug}</div>
+        <textarea class="qcard-input" id="qinput_${id}" rows="2" placeholder="Escribe tu respuesta aquí..."></textarea>
+      </div>
+      <div class="qcard-progress-wrap">
+        <div class="qcard-timer-txt" id="qtimer_${id}"></div>
+        <div class="qcard-progress"><div class="qcard-progress-bar" id="qbar_${id}"></div></div>
+      </div>
+      <div class="qcard-ft">
+        <button class="qcard-confirm" id="qconfirm_${id}">✓ Confirmar</button>
+        <button class="qcard-skip" id="qskip_${id}">Omitir</button>
+      </div>
+    </div>`;
+
+  el.addEventListener('mousedown',e=>cardMouseDown(e,id));
+  document.getElementById('canvas').appendChild(el);
+
+  // Enter key confirms
+  document.getElementById('qinput_'+id).addEventListener('keydown',e=>{
+    if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();_resolveQuestion(id,true);}
+  });
+  document.getElementById('qconfirm_'+id).addEventListener('click',()=>_resolveQuestion(id,true));
+  document.getElementById('qskip_'+id).addEventListener('click',()=>_resolveQuestion(id,false));
+
+  // Countdown timer
+  const start=Date.now();
+  oc._timer=setInterval(()=>{
+    const remaining=Math.max(0,timeout-(Date.now()-start));
+    const pct=remaining/timeout*100;
+    const bar=document.getElementById('qbar_'+id);
+    const timerEl=document.getElementById('qtimer_'+id);
+    if(bar)bar.style.width=pct+'%';
+    if(timerEl)timerEl.textContent=Math.ceil(remaining/1000)+'s';
+    if(remaining<=0){clearInterval(oc._timer);_resolveQuestion(id,false);}
+  },250);
+
+  glog('think','Operador','human','◎ '+opts.question);
+  drawConns();
+  return oc;
+}
+
+function _resolveQuestion(cardId, useInput){
+  const oc=outputCards.find(c=>c.id===cardId);if(!oc)return;
+  if(oc._timer)clearInterval(oc._timer);
+  const inputEl=document.getElementById('qinput_'+cardId);
+  const userVal=inputEl?.value?.trim()||'';
+  const answer=useInput&&userVal ? userVal : (oc._suggestion||'');
+  const source=useInput&&userVal?'usuario':'sugerencia';
+
+  const el=document.getElementById(cardId);
+  if(el){el.style.opacity='0';el.style.transition='opacity .25s';
+    setTimeout(()=>{el.remove();outputCards=outputCards.filter(c=>c.id!==cardId);drawConns();},260);}
+  else{outputCards=outputCards.filter(c=>c.id!==cardId);}
+
+  glog('decision','Operador','human','Respuesta ('+source+'): '+answer.slice(0,80));
+  if(oc._onAnswer)oc._onAnswer(answer,source);
+}
+
+function expandContextCard(id){
+  const oc=outputCards.find(c=>c.id===id);if(!oc||!oc.isCtxFile)return;
+  expandTarget={type:'ctx-file',id,pipelineId:oc.pipelineId};
+  document.getElementById('ex-title').textContent='⬡ context.json — '+oc.pipelineId;
+  document.getElementById('expandcontent').innerHTML=`<textarea class="ex-textarea" id="ex-edit" style="min-height:400px;font-size:11px">${oc.content||''}</textarea>`;
+  document.getElementById('expandwin').classList.add('open');
+}
+
+function refreshContextCard(id,pipelineId){
+  if(!pipelineId)return;
+  fetch('/api/pipelines/'+pipelineId+'/context')
+    .then(r=>r.json())
+    .then(data=>{
+      const ctx=data?.context;if(!ctx)return;
+      const oc=outputCards.find(c=>c.id===id);
+      const x=oc?.x||2800,y=oc?.y||2200;
+      mkContextCard(pipelineId,ctx,x,y);
+      drawConns();
+      glog('action','Canvas','system','⬡ context.json actualizado');
+    })
+    .catch(()=>glog('warn','Canvas','system','No se pudo actualizar el contexto'));
+}
+
+function openContextCard(pipelineId){
+  if(!pipelineId){glog('warn','PILOTO','pilot','No hay pipeline activo para ver el contexto.');return;}
+  const pilot=nodes.find(n=>n.type==='pilot'||n.agentId==='AG-01');
+  const cx=pilot?(pilot.x+270):(3000);
+  const cy=pilot?(pilot.y-30):(2400);
+  const existingOc=outputCards.find(c=>c.isCtxFile&&c.pipelineId===pipelineId);
+  if(existingOc){expandContextCard(existingOc.id);return;}
+  fetch('/api/pipelines/'+pipelineId+'/context')
+    .then(r=>r.json())
+    .then(data=>{
+      const ctx=data?.context||{};
+      mkContextCard(pipelineId,ctx,cx,cy);
+      drawConns();
+      glog('action','PILOTO','pilot','⬡ Abriendo context.json del pipeline');
+    })
+    .catch(()=>{
+      mkContextCard(pipelineId,{estado:'sin_datos',pipeline_name:pipelineId},cx,cy);
+      drawConns();
+    });
+}
+
 function mkOutputCard(oc){
   const el=document.createElement('div');
   el.className='output-card';el.id=oc.id;
@@ -323,22 +634,24 @@ function mkOutputCard(oc){
   const tc=IO_COLORS[oc.type]||'#706860';
   const previewHTML=getCardPreview(oc);
   el.innerHTML=`
-    <div class="port in" data-nid="${oc.id}" data-pt="in" style="top:50%"></div>
-    <div class="oc-header">
-      <div class="oc-from"><div class="oc-from-dot" style="background:${oc.fromDot}"></div><span>${oc.fromNodeName}</span></div>
-      <span class="oc-type ${oc.type}">${IO_ICONS[oc.type]||'◆'} ${oc.type}</span>
-    </div>
-    <div class="oc-body" onclick="expandCard('${oc.id}')" title="Click para ver completo">
-      ${previewHTML}
-      <div class="oc-expand-hint">ver / editar</div>
-    </div>
-    <div class="oc-footer">
-      <span class="oc-size" style="color:${tc}88">${oc.label}</span>
-      <div class="oc-actions">
-        <button class="oc-btn" onclick="event.stopPropagation();expandCard('${oc.id}')" title="Expandir">⤢</button>
-        <button class="oc-btn" onclick="event.stopPropagation();deleteCard('${oc.id}')" title="Eliminar">✕</button>
+    <div class="port in" data-nid="${oc.id}" data-pt="in"></div>
+    <div class="oc-inner">
+      <div class="oc-header">
+        <div class="oc-from"><div class="oc-from-dot" style="background:${oc.fromDot}"></div><span>${oc.fromNodeName}</span></div>
+        <span class="oc-type ${oc.type}">${IO_ICONS[oc.type]||'◆'} ${oc.type}</span>
       </div>
-      <div class="oc-connect-port" data-nid="${oc.id}" data-pt="out" title="Arrastrar para conectar"></div>
+      <div class="oc-body" onclick="expandCard('${oc.id}')" title="Click para ver completo">
+        ${previewHTML}
+        <div class="oc-expand-hint">ver / editar</div>
+      </div>
+      <div class="oc-footer">
+        <span class="oc-size" style="color:${tc}88">${oc.label}</span>
+        <div class="oc-actions">
+          <button class="oc-btn" onclick="event.stopPropagation();expandCard('${oc.id}')" title="Expandir">⤢</button>
+          <button class="oc-btn" onclick="event.stopPropagation();deleteCard('${oc.id}')" title="Eliminar">✕</button>
+        </div>
+        <div class="oc-connect-port" data-nid="${oc.id}" data-pt="out" title="Arrastrar para conectar"></div>
+      </div>
     </div>`;
 
   el.addEventListener('mousedown',e=>cardMouseDown(e,oc.id));
@@ -400,14 +713,17 @@ function deleteCard(id){
   drawConns();
 }
 
+function isProtectedCard(card){
+  return card.label==='Prompt inicial'||card.isCtxFile||card.isQuestionCard||document.getElementById(card.id)?.classList.contains('seed-input-card');
+}
+
 function reconcileOutputCardsFromContext(ctx){
   const validAssetIds=new Set(Object.keys(ctx?.assets||{}));
-  const toRemove=outputCards.filter(card=>!card.assetId||!validAssetIds.has(card.assetId));
-  toRemove.forEach(card=>{
-    document.getElementById(card.id)?.remove();
-  });
-  outputCards=outputCards.filter(card=>card.assetId&&validAssetIds.has(card.assetId));
+  const toRemove=outputCards.filter(card=>!isProtectedCard(card)&&(!card.assetId||!validAssetIds.has(card.assetId)));
+  toRemove.forEach(card=>document.getElementById(card.id)?.remove());
+  outputCards=outputCards.filter(card=>isProtectedCard(card)||(card.assetId&&validAssetIds.has(card.assetId)));
   conns=conns.filter(c=>{
+    if(c.isCtxConn)return true;
     if(!String(c.from||'').startsWith('oc'))return true;
     return outputCards.some(card=>card.id===c.from);
   });
@@ -416,11 +732,32 @@ function reconcileOutputCardsFromContext(ctx){
 
 function applyContextToUI(ctx,pipelineId){
   if(!ctx)return;
-  if(ctx.pipeline?.iniciado_en&&['en_progreso','iniciando'].includes(ctx.estado))startPipelineRunClock(ctx.pipeline.iniciado_en);
-  else if(['pausado','completo','cancelado','corrupto'].includes(ctx.estado))stopPipelineRunClock();
+  if(pipelineId&&currentPipelineId&&pipelineId!==currentPipelineId)return; // stale — ignore
+  if(_userStartedRun&&ctx.pipeline?.iniciado_en&&['en_progreso','iniciando'].includes(ctx.estado))startPipelineRunClock(ctx.pipeline.iniciado_en);
+  else if(['pausado','completo','cancelado','corrupto'].includes(ctx.estado)){stopPipelineRunClock();_userStartedRun=false;}
   reconcileOutputCardsFromContext(ctx);
   const assets=ctx.assets||{};
   Object.values(assets).forEach(asset=>upsertAssetCardFromContext(asset,ctx));
+  // Auto-show context card and wire it to pilot
+  if(pipelineId){
+    const pilot=nodes.find(n=>n.type==='pilot'||n.agentId==='AG-01');
+    const seedCard=outputCards.find(c=>c.label==='Prompt inicial');
+    const cx=seedCard?(seedCard.x):(pilot?(pilot.x-320):2600);
+    const cy=seedCard?(seedCard.y+200):(pilot?(pilot.y+10):2400);
+    const existing=outputCards.find(c=>c.isCtxFile&&c.pipelineId===pipelineId);
+    const ctxOc=mkContextCard(pipelineId,ctx,existing?.x??cx,existing?.y??cy);
+    // Connect context card ↔ pilot if not already wired
+    if(pilot&&ctxOc){
+      const alreadyIn =conns.some(c=>c.from===ctxOc.id&&c.to===pilot.id);
+      const alreadyOut=conns.some(c=>c.from===pilot.id&&(c.to===ctxOc.id||c.fp==='ctx'));
+      if(!alreadyIn)conns.push({id:'c'+Math.random().toString(36).slice(2,10),
+        from:ctxOc.id,fp:'out',to:pilot.id,tp:'in',active:false,fromCard:true,isCtxConn:true});
+      if(!alreadyOut)conns.push({id:'c'+Math.random().toString(36).slice(2,10),
+        from:pilot.id,fp:pilot.type==='pilot'?'out-y':'out',to:ctxOc.id,tp:'in',
+        active:false,isCtxConn:true,cond:pilot.type==='pilot',condT:'yes'});
+    }
+    drawConns();
+  }
 
   const agentStates=ctx.agentes_activos||{};
   nodes.forEach(n=>{
@@ -447,6 +784,7 @@ function applyContextToUI(ctx,pipelineId){
 
 function syncRuntimeFromContext(pipelineId){
   if(!pipelineId)return Promise.resolve();
+  if(pipelineId!==currentPipelineId)return Promise.resolve(); // stale — ignore
   return fetch('/api/pipelines/'+pipelineId+'/context')
     .then(r=>r.json())
     .then(data=>{
@@ -571,6 +909,19 @@ function saveExpand(){
   } else if(expandTarget?.type==='card'){
     const oc=outputCards.find(c=>c.id===expandTarget.id);
     if(oc){oc.content=val;const el=document.getElementById(oc.id);if(el){const b=el.querySelector('.oc-body');if(b)b.innerHTML=getCardPreview(oc)+`<div class="oc-expand-hint">ver / editar</div>`;}}
+  } else if(expandTarget?.type==='ctx-file'){
+    const oc=outputCards.find(c=>c.id===expandTarget.id);
+    if(oc){
+      oc.content=val;
+      let parsed=null;try{parsed=JSON.parse(val);}catch(e){glog('warn','Canvas','system','JSON inválido — no se guardó en el servidor');closeExpand();return;}
+      oc._ctx=parsed;
+      // Save to server
+      fetch('/api/pipelines/'+expandTarget.pipelineId+'/context',{
+        method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({context:parsed})
+      }).then(()=>glog('done','Canvas','system','⬡ context.json guardado'))
+        .catch(()=>glog('warn','Canvas','system','⬡ No se pudo guardar en el servidor (guardado local)'));
+    }
   }
   closeExpand();
 }
@@ -588,26 +939,48 @@ function setStatus(id,s){
   const ft=document.getElementById('fst_'+id);if(ft)ft.textContent=stlabel(s);
   const dots=el.querySelectorAll('.nstatus-dot');
   if(dots.length)dots[dots.length-1].className='nstatus-dot '+(s==='awaiting-input'?'running':(s==='paused'?'idle':s));
+  // Activate connections incoming to this node when it starts/finishes
+  let needsDraw=false;
+  conns.forEach(c=>{
+    if(c.to===id&&!c.fromCard){
+      const active=s==='running'||s==='done';
+      if(c.active!==active){c.active=active;needsDraw=true;}
+    }
+  });
+  if(needsDraw)drawConns();
+  // Auto output card when done
+  if(s==='done')autoOutputCard(n);
 }
 
 
 function runNode(id){
   const n=nodes.find(x=>x.id===id);if(!n)return;
-
+  // Visual flash feedback
+  const el=document.getElementById(id);
+  if(el){el.classList.add('node-flash');setTimeout(()=>el.classList.remove('node-flash'),500);}
   if(n.agentId==='AG-01'||n.type==='pilot'){
-    glog('system',n.name,n.type,'La ejecución real del pipeline pertenece al Piloto. Usando Ejecutar global.');
-    runAll();
-    return;
+    glog('system',n.name,n.type,'▶ Ejecutando pipeline completo...');
+    runAll();return;
   }
-
   if(n.type==='human'){
-    n.logs.push({t:ts(),m:'Operador gestionado desde terminal',c:'ok'});
-    glog('system',n.name,n.type,'El Operador no se ejecuta desde el canvas. Usa la terminal para enviar feedback en caliente.');
+    // Operator drops a question card on the canvas
+    const question=n.cfg?.prompt||'¿Cuál es la dirección que debe tomar el pipeline en este punto?';
+    const suggestion=n.cfg?.outputDefault||'Continuar con el flujo sugerido por el piloto';
+    mkQuestionCard({
+      question,suggestion,timeout:20000,
+      pipelineId:currentPipelineId,
+      fieldKey:'operator_decision_'+n.id,
+      x:n.x+290,y:n.y,
+      onAnswer:(answer,source)=>{
+        n.logs.push({t:ts(),m:'Respuesta ('+source+'): '+answer.slice(0,60),c:'ok'});
+        glog('decision',n.name,n.type,'Decisión registrada: '+answer.slice(0,60));
+      }
+    });
     return;
   }
-
-  n.logs.push({t:ts(),m:'Canvas en modo visual',c:'wn'});
-  glog('warn',n.name,n.type,'Este card es solo visual. El backend decide cuándo y cómo corre este agente.');
+  openM(id);
+  n.logs.push({t:ts(),m:'▶ Activado desde canvas',c:'ok'});
+  glog('action',n.name,n.type,'▶ Agente activado. El backend coordina la ejecución real.');
 }
 
 function triggerOperatorWarning(agentName){
@@ -643,9 +1016,13 @@ function formatPipelineElapsed(ms){
 function renderPipelineRunState(){
   const main=document.getElementById('run-btn-main');
   const mini=document.getElementById('run-btn-mini');
+  const stopMini=document.getElementById('stop-btn-mini');
   const timer=document.getElementById('run-timer');
   const active=Boolean(pipelineRunStartedAt);
-  [main,mini].forEach(el=>{if(el)el.classList.toggle('pipeline-live',active);});
+  // Run/EJECUTAR: gold when idle, normal when running
+  [main,mini].forEach(el=>{if(el)el.classList.toggle('pipeline-live',false);});
+  // Stop: blue when pipeline is running
+  if(stopMini)stopMini.classList.toggle('pipeline-live',active);
   if(timer){
     if(active){
       timer.classList.add('live');
@@ -683,6 +1060,7 @@ async function stopAll(){
       glog('error','Pipeline','system','Error deteniendo pipeline: '+(data.error||res.status));
       return;
     }
+    _userStartedRun=false;
     clearOperatorWarning();
     if(data.context)applyContextToUI(data.context,currentPipelineId);
     if(data.stopped){
@@ -701,6 +1079,12 @@ async function _readPipelineSSE(){
 async function runAll(){
   if(!currentPipelineId){glog('warn','Pipeline','system','Sin pipeline activo. Crea uno primero.');return;}
   if(!nodes.length){glog('warn','Pipeline','system','Sin agentes en el canvas.');return;}
+  _userStartedRun=true;
+  // Minimizar ventanas al ejecutar
+  const lw=document.getElementById('logwin');
+  if(lw&&!lw.classList.contains('minimized'))toggleLogMin();
+  const mw=document.getElementById('mtwin');
+  if(mw&&!mw.classList.contains('minimized'))toggleMTMin();
   if(!terminalPipelineId||terminalPipelineId!==currentPipelineId)connectSSE(currentPipelineId);
   glog('system','Pipeline','system','▶ Arrancando pipeline con AG-01 Piloto…');
   startPipelineRunClock();
@@ -731,11 +1115,15 @@ function handleExecutionEvent_typed(){
   glog('warn','Pipeline','system','Los eventos del runner autónomo del canvas están desactivados.');
 }
 function resetAll(){
+  _userStartedRun=false;
   stopAll();conns.forEach(c=>c.active=false);
-  // Remove output cards
-  outputCards.forEach(oc=>document.getElementById(oc.id)?.remove());
-  outputCards=[];
-  nodes.forEach(n=>{n.img=null;n.promptOut=null;const v=document.getElementById('vis_'+n.id);if(v)v.innerHTML=visHTML(n);});
+  // Remove output cards but keep seed/prompt and context cards
+  outputCards=outputCards.filter(oc=>{
+    if(isProtectedCard(oc))return true;
+    document.getElementById(oc.id)?.remove();
+    return false;
+  });
+  nodes.forEach(n=>{n.img=null;n.promptOut=null;n.output='';n.status='idle';const v=document.getElementById('vis_'+n.id);if(v)v.innerHTML=visHTML(n);setStatus(n.id,'idle');});
   drawConns();
 }
 function delSel(){
@@ -761,7 +1149,7 @@ function nmd(e,id){
 }
 function wmd(e){
   if(e.button===1||(e.button===0&&e.altKey)){startPan(e);e.preventDefault();return;}
-  if(e.button===0&&!drag&&!cardDrag&&!connMode){selN(null);startPan(e);}
+  if(e.button===0&&!drag&&!cardDrag&&!connFrom){selN(null);startPan(e);}
 }
 function startPan(e){pan=true;psx=e.clientX;psy=e.clientY;ppx=px;ppy=py;document.getElementById('wrap').style.cursor='grabbing';}
 function wmm(e){
@@ -844,7 +1232,6 @@ function findNodeAtPos(x,y){
 // ══════════════════════════════
 function toggleConn(){
   connMode=!connMode;
-  document.getElementById('connbtn').classList.toggle('act',connMode);
   document.getElementById('wrap').style.cursor=connMode?'crosshair':'default';
 }
 function setConnFrom(cf){
@@ -901,12 +1288,63 @@ function drawConns(){
     const path=document.createElementNS('http://www.w3.org/2000/svg','path');
     path.setAttribute('d',cubic(fp.x,fp.y,tp.x,tp.y));
     let cls='cpath',marker='ma';
-    if(c.fromCard){cls='cpath card-conn';if(c.active)cls+=' active';marker=c.active?'ma-a':'ma-card';}
+    if(c.isCtxConn){cls='cpath ctx-conn';marker='ma-ctx';}
+    else if(c.fromSeed){cls='cpath seed-conn';marker='ma-a';}
+    else if(c.fromCard){cls='cpath card-conn';if(c.active)cls+=' active';marker=c.active?'ma-a':'ma-card';}
     else if(c.active){cls+=' active';marker='ma-a';}
     else if(c.cond){cls+=c.condT==='yes'?' cy':' cn';marker=c.condT==='yes'?'ma-y':'ma-n';}
     path.setAttribute('class',cls);path.setAttribute('marker-end',`url(#${marker})`);
+    path.dataset.connId=c.id;
+    path.style.cursor='pointer';
+    path.addEventListener('click',e=>{e.stopPropagation();showConnPopup(c,e);});
     svg.appendChild(path);
   });
+}
+
+function showConnPopup(c,evt){
+  document.querySelectorAll('.conn-popup').forEach(el=>el.remove());
+  const fromNode=nodes.find(x=>x.id===c.from)||outputCards.find(x=>x.id===c.from);
+  const toNode=nodes.find(x=>x.id===c.to)||outputCards.find(x=>x.id===c.to);
+  const fromName=fromNode?.name||fromNode?.fromNodeName||'Nodo';
+  const toName=toNode?.name||toNode?.fromNodeName||'Nodo';
+  const ftp=fromNode?.type?T[fromNode.type]:null;
+  const outputType=fromNode?.outputType||ftp?.outputType||'json';
+  const prompt=fromNode?.prompt||ftp?.prompt||'';
+  const content=fromNode?.output||fromNode?.content||(prompt?`Prompt: ${prompt}`:`Tipo de dato: ${outputType}`);
+  const condBadge=c.cond?`<span style="background:${c.condT==='yes'?'rgba(58,138,58,.2)':'rgba(138,58,58,.2)'};color:${c.condT==='yes'?'#3a8a3a':'#8a3a3a'};padding:1px 6px;border-radius:2px;font-size:8px">${c.condT==='yes'?'SÍ ✓':'NO ✗'}</span>`:'';
+  const activeBadge=c.active?`<span style="color:#3a8a3a;font-size:8px">● ACTIVO</span>`:`<span style="color:#3a3630;font-size:8px">○ IDLE</span>`;
+  const pop=document.createElement('div');
+  pop.className='conn-popup';
+  pop.style.cssText=`position:fixed;left:${Math.min(evt.clientX+14,window.innerWidth-380)}px;top:${Math.max(evt.clientY-20,8)}px;z-index:3000;background:#1a1612;border:1px solid rgba(200,160,64,.35);border-radius:7px;padding:12px 14px;min-width:260px;max-width:370px;box-shadow:0 16px 48px rgba(0,0,0,.85)`;
+  pop.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px">
+      <span style="font-size:8px;color:#c8a040;letter-spacing:.1em;text-transform:uppercase">↗ Conexión ${condBadge}</span>
+      <button onclick="this.closest('.conn-popup').remove()" style="background:none;border:none;color:#706860;cursor:pointer;font-size:12px;line-height:1;padding:0">✕</button>
+    </div>
+    <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;margin-bottom:10px">
+      <span style="color:#ddd8cc">${fromName}</span><span style="color:#3a3630"> → </span><span style="color:#ddd8cc">${toName}</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <span style="font-size:9px;color:#706860">${IO_ICONS[outputType]||'◆'} ${outputType}</span>
+      ${activeBadge}
+    </div>
+    <div style="background:#0a0808;border:1px solid rgba(255,255,255,.06);border-radius:3px;padding:8px;font-size:10px;color:#9a9088;font-family:'IBM Plex Mono',monospace;max-height:130px;overflow-y:auto;line-height:1.6;white-space:pre-wrap">${String(content).slice(0,320)}${String(content).length>320?'…':''}</div>`;
+  document.body.appendChild(pop);
+  setTimeout(()=>document.addEventListener('click',function close(e){if(!pop.contains(e.target)){pop.remove();document.removeEventListener('click',close);}},10));
+}
+
+function autoOutputCard(n){
+  const tp=T[n.type];if(!tp)return;
+  if(n.type==='pilot'||n.type==='human')return;
+  if(outputCards.find(oc=>oc.fromNodeId===n.id&&oc.assetId==='auto-'+n.id))return;
+  const outputType=n.outputType||tp.outputType||'json';
+  const content=n.output||(outputType==='json'?JSON.stringify({status:'done',agent:n.name,result:'Completado',ts:new Date().toISOString()},null,2):(outputType==='text'?(n.promptOut||tp.promptText||`Output de ${n.name}`):`Output generado por ${n.name}`));
+  const oc={id:'oc'+Math.random().toString(36).slice(2,10),assetId:'auto-'+n.id,revisionStatus:'aprobado',fromNodeId:n.id,fromNodeName:n.name,fromDot:tp.dot||'#888',type:outputType,label:tp.label+' · output',content,x:n.x+250,y:n.y+20};
+  outputCards.push(oc);mkOutputCard(oc);
+  conns.filter(c=>c.from===n.id).forEach(nc=>{
+    if(nc.to)conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:oc.id,fp:'out',to:nc.to,tp:'in',active:true,fromCard:true});
+  });
+  drawConns();
 }
 
 // ══════════════════════════════
@@ -1023,8 +1461,8 @@ function renderM(n){
   if(ctab==='cfg'){
     body.innerHTML=`
       <div class="fg"><div class="fl">Nombre</div><input class="fi" value="${n.name}" oninput="nodes.find(x=>x.id==='${n.id}').name=this.value;document.getElementById('mtitle').textContent=this.value;document.getElementById('${n.id}')?.querySelector('.nh-name').textContent=this.value"></div>
-      <div class="fg"><div class="fl">Prompt / Instrucciones</div><textarea class="fi" rows="5" oninput="nodes.find(x=>x.id==='${n.id}').prompt=this.value">${n.prompt||tp.prompt||''}</textarea></div>
-      <div class="fg"><div class="fl">Verificación automática</div><textarea class="fi" rows="3" oninput="nodes.find(x=>x.id==='${n.id}').verification=this.value">${n.verification||tp.verification||''}</textarea></div>
+      <div class="fg"><div class="fl"><span>Prompt / Instrucciones</span><button class="ai-suggest-btn" onclick="showPromptSuggestions(event,'${n.id}','prompt')">✦ Sugerir IA</button></div><textarea class="fi" id="fi-prompt-${n.id}" rows="5" oninput="nodes.find(x=>x.id==='${n.id}').prompt=this.value">${n.prompt||tp.prompt||''}</textarea></div>
+      <div class="fg"><div class="fl"><span>Verificación automática</span><button class="ai-suggest-btn" onclick="showPromptSuggestions(event,'${n.id}','verification')">✦ Sugerir IA</button></div><textarea class="fi" id="fi-verification-${n.id}" rows="3" oninput="nodes.find(x=>x.id==='${n.id}').verification=this.value">${n.verification||tp.verification||''}</textarea></div>
       <div class="frow"><div class="fg"><div class="fl">Timeout (seg)</div><input class="fi" type="number" value="30"></div><div class="fg"><div class="fl">Reintentos</div><input class="fi" type="number" value="3"></div></div>
       ${buildModelSelector(n)}
       <div class="fg"><div class="fl">Memoria interna (archivos de contexto)</div>
@@ -1156,23 +1594,26 @@ async function deletePipeline(id){
 }
 
 async function newPipeline(){
-  const n=prompt('Nombre del nuevo pipeline:','Mi Pipeline');
-  if(!n)return;
   closeSide();
   try{
+    const existing=await fetch('/api/pipelines').then(r=>r.json()).catch(()=>[]);
+    const n='Pipeline '+(existing.length+1);
     const res=await fetch('/api/pipelines',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
     const pipeline=await res.json();
     if(!res.ok)throw new Error(pipeline.error||'Error');
-    // Clear canvas
+    // Close old SSE so stale events can't restore previous state
+    if(sseConnection){sseConnection.close();sseConnection=null;}
+    _userStartedRun=false;
+    // 1. Clear canvas now — user sees it empty
     nodes.forEach(nd=>{const el=document.getElementById(nd.id);if(el)el.remove();});
     outputCards.forEach(c=>{const el=document.getElementById(c.id);if(el)el.remove();});
     nodes=[];conns=[];outputCards=[];
     document.getElementById('svgl').innerHTML='';
     currentPipelineId=pipeline.id;
+    terminalPipelineId=null;
     document.getElementById('pipe-label').textContent=pipeline.name;
-    connectSSE(pipeline.id);
-    setTimeout(()=>{drawConns();fitAll();updateMM();},80);
-    glog('done','Pipeline','system','Pipeline "'+pipeline.name+'" creado — escribe en la terminal qué quieres producir');
+    drawConns();fitAll();updateMM();
+    glog('done','Pipeline','system','"'+pipeline.name+'" creado — escribe tu prompt y presiona Enter para que el Arquitecto diseñe el pipeline');
   }catch(e){glog('err','Pipeline','system','Error creando pipeline: '+e.message);}
 }
 
@@ -1200,6 +1641,41 @@ function renderLogEntry(entry){
 }
 function setLogFilter(f,el){logFilter_=f;document.querySelectorAll('.lf').forEach(x=>x.classList.remove('on'));el.classList.add('on');const body=document.getElementById('logbody');body.innerHTML='';globalLog.forEach(e=>{if(logFilter_==='all'||e.type===logFilter_)renderLogEntry(e);});}
 function clearLog(){globalLog=[];document.getElementById('logbody').innerHTML='';}
+// ── Terminal title cycle ─────────────────────────────────────
+let _titleCycleTimer=null,_titleCycleIdx=0;
+const TITLE_STATES=[
+  'Analizando prompt...',
+  'Inicializando Arquitecto...',
+  'Diseñando estructura...',
+  'Seleccionando agentes...',
+  'Configurando bloques...',
+  'Asignando dependencias...',
+  'Construyendo canvas...',
+];
+function startTitleCycle(){
+  const title=document.getElementById('logtitle');
+  const spinner=document.getElementById('logtspinner');
+  if(title)title.classList.add('loading');
+  if(spinner)spinner.classList.add('active');
+  _titleCycleIdx=0;
+  clearInterval(_titleCycleTimer);
+  _titleCycleTimer=setInterval(()=>{
+    if(title)title.textContent=TITLE_STATES[_titleCycleIdx%TITLE_STATES.length];
+    _titleCycleIdx++;
+  },1400);
+  if(title)title.textContent=TITLE_STATES[0];
+}
+function stopTitleCycle(finalText){
+  clearInterval(_titleCycleTimer);_titleCycleTimer=null;
+  const title=document.getElementById('logtitle');
+  const spinner=document.getElementById('logtspinner');
+  if(spinner)spinner.classList.remove('active');
+  if(title){
+    title.classList.remove('loading');
+    title.textContent=finalText||'Log Global — Pipeline';
+  }
+}
+
 function toggleLogMin(){const win=document.getElementById('logwin');logMinimized=!logMinimized;win.classList.toggle('minimized',logMinimized);if(!logMinimized)win.style.height=logPrevH+'px';else logPrevH=win.offsetHeight;}
 function toggleLogMax(){const win=document.getElementById('logwin');if(win.offsetHeight<300){logPrevH=win.offsetHeight;win.style.height='400px';}else win.style.height=logPrevH+'px';}
 
@@ -1254,19 +1730,102 @@ function parseLogCommand(){
     return;
   }
 
-  // Todo lo demás va a la API real (agentes + comandos del sistema)
+  // Texto libre → crear pipeline a partir del prompt
+  if(!val.startsWith('/')){createPipelineFromPrompt(val);return;}
   sendTerminalInput(val);
 }
+
+// ══════════════════════════════
+// PIPELINE CREATION FLOW
+// ══════════════════════════════
+function showCreatingAnimation(promptText){
+  let ov=document.getElementById('creating-overlay');
+  if(!ov){ov=document.createElement('div');ov.id='creating-overlay';document.getElementById('wrap').appendChild(ov);}
+  const short=promptText.length>60?promptText.slice(0,58)+'…':promptText;
+  ov.innerHTML=`<div class="co-inner"><div class="co-rings"><div class="co-ring co-r1"></div><div class="co-ring co-r2"></div><div class="co-ring co-r3"></div></div><div class="co-label">Creando pipeline...</div><div class="co-prompt">"${short}"</div></div>`;
+  ov.style.display='flex';
+}
+function hideCreatingAnimation(){
+  const ov=document.getElementById('creating-overlay');
+  if(ov)ov.style.display='none';
+}
+function createPipelineFromPrompt(promptText){
+  // Minimizar terminal y modelos para dar espacio al canvas
+  const lw=document.getElementById('logwin');
+  const mw=document.getElementById('mtwin');
+  if(lw&&!lw.classList.contains('minimized'))toggleLogMin();
+  if(mw&&!mw.classList.contains('minimized'))toggleMTMin();
+  // Clear canvas
+  nodes.forEach(n=>document.getElementById(n.id)?.remove());
+  outputCards.forEach(c=>document.getElementById(c.id)?.remove());
+  nodes=[];conns=[];outputCards=[];
+  document.getElementById('svgl').innerHTML='';
+  // Store for after canvas sync
+  _pendingSeedPrompt=promptText;
+  // Show animation + safety timeout (30s)
+  showCreatingAnimation(promptText);
+  startTitleCycle();
+  setTimeout(()=>{
+    if(_pendingSeedPrompt){
+      hideCreatingAnimation();_pendingSeedPrompt=null;
+      stopTitleCycle('Log Global — Pipeline');
+      glog('warn','Canvas','system','Tiempo de espera agotado. Si el pipeline fue creado, selecciónalo en el panel lateral.');
+    }
+  },30000);
+  glog('think','Canvas','system','◉ Creando pipeline: "'+promptText+'"');
+  // Call API
+  sendTerminalInput(promptText);
+}
+
 document.getElementById('log-cmd').addEventListener('keydown',e=>{
   if(e.key==='Enter'){parseLogCommand();e.preventDefault();}
+  if(e.key==='Escape'){const w=document.getElementById('logwin');if(w.classList.contains('spotlight'))toggleLogSpotlight();e.preventDefault();}
   if(e.key==='Tab'){e.preventDefault();const val=e.target.value.replace('/','');const m=Object.keys(LOG_COMMANDS).find(k=>k.startsWith(val));if(m)e.target.value='/'+m;}
+  if(e.key==='ArrowUp'||e.key==='ArrowDown'){
+    const items=document.querySelectorAll('#cmd-hints .ch-item');if(!items.length)return;
+    e.preventDefault();
+    let idx=[...items].findIndex(i=>i.classList.contains('focused'));
+    items.forEach(i=>i.classList.remove('focused'));
+    idx=e.key==='ArrowDown'?Math.min(idx+1,items.length-1):Math.max(idx-1,0);
+    items[idx].classList.add('focused');items[idx].scrollIntoView({block:'nearest'});
+    document.getElementById('log-cmd').value=items[idx].dataset.cmd;
+  }
 });
 document.getElementById('log-cmd').addEventListener('input',function(){
-  const val=this.value;const hints=document.getElementById('cmd-hints');
-  if(!val.startsWith('/')){hints.innerHTML='';return;}
-  const q=val.slice(1).toLowerCase();const matches=Object.entries(LOG_COMMANDS).filter(([k])=>k.startsWith(q));
-  hints.innerHTML=matches.map(([k,v])=>`<div onclick="document.getElementById('log-cmd').value='/${k}';parseLogCommand()" style="padding:5px 10px;font-size:9px;color:#706860;cursor:pointer;display:flex;gap:8px;border-bottom:1px solid rgba(255,255,255,.04);font-family:IBM Plex Mono,monospace" onmouseover="this.style.background='rgba(255,255,255,.04)'" onmouseout="this.style.background=''">${'<span style=color:#c8a040>/'+k+'</span>'} ${v.desc}</div>`).join('');
+  renderCmdHints(this.value);
 });
+
+function renderCmdHints(val){
+  const hints=document.getElementById('cmd-hints');
+  const inSpotlight=document.getElementById('logwin').classList.contains('spotlight');
+  if(!inSpotlight&&!val.startsWith('/')){hints.innerHTML='';return;}
+  const q=(val.startsWith('/')?val.slice(1):val).toLowerCase();
+  const matches=Object.entries(LOG_COMMANDS).filter(([k])=>!q||k.startsWith(q));
+  hints.innerHTML=matches.map(([k,v])=>`<div class="ch-item" data-cmd="/${k}" onclick="document.getElementById('log-cmd').value='/${k}';parseLogCommand()" style="padding:5px 10px;font-size:9px;color:#706860;cursor:pointer;display:flex;gap:8px;border-bottom:1px solid rgba(255,255,255,.04);font-family:'IBM Plex Mono',monospace" onmouseover="this.classList.add('focused');this.style.background='rgba(255,255,255,.04)'" onmouseout="this.classList.remove('focused');this.style.background=''">`
+    +`<span style="color:#c8a040">/${k}</span><span>${v.desc}</span></div>`).join('');
+}
+
+let _spotlightPrev=null;
+function toggleLogSpotlight(){
+  const win=document.getElementById('logwin');
+  if(win.classList.contains('spotlight')){
+    win.classList.remove('spotlight');
+    if(_spotlightPrev){
+      win.style.left=_spotlightPrev.left;win.style.top=_spotlightPrev.top;
+      win.style.right=_spotlightPrev.right;win.style.bottom=_spotlightPrev.bottom;
+      win.style.width=_spotlightPrev.width;win.style.height=_spotlightPrev.height;
+      win.style.transform='';_spotlightPrev=null;
+    }
+    document.getElementById('cmd-hints').innerHTML='';
+  } else {
+    _spotlightPrev={left:win.style.left,top:win.style.top,right:win.style.right,
+      bottom:win.style.bottom,width:win.style.width,height:win.style.height};
+    win.classList.add('spotlight');
+    const inp=document.getElementById('log-cmd');
+    inp.value='';inp.focus();
+    renderCmdHints('');
+  }
+}
 
 // ══════════════════════════════
 // AGENT BUILDER (MOCK)
@@ -1417,6 +1976,45 @@ function scheduleSave(){
   },1500);
 }
 
+function exportPipeline(){
+  const name=document.getElementById('pipe-label')?.textContent||'pipeline';
+  const data={version:1,name,exportedAt:new Date().toISOString(),nodes,conns};
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=name.replace(/\s+/g,'_').toLowerCase()+'_pipeline.json';
+  a.click();URL.revokeObjectURL(a.href);
+  glog('done','Pipeline','system','Pipeline exportado: '+a.download);
+}
+
+function importPipeline(){
+  document.getElementById('import-file-input').click();
+}
+
+function handleImportFile(input){
+  const file=input.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const data=JSON.parse(e.target.result);
+      if(!data.nodes||!data.conns)throw new Error('Formato inválido');
+      nodes.forEach(n=>document.getElementById(n.id)?.remove());
+      outputCards.forEach(oc=>document.getElementById(oc.id)?.remove());
+      nodes=[];conns=[];outputCards=[];
+      const nameLabel=data.name||file.name.replace(/_pipeline\.json$/,'').replace(/_/g,' ');
+      document.getElementById('pipe-label').textContent=nameLabel;
+      data.nodes.forEach(n=>{nodes.push(n);mkNode(n);});
+      conns=data.conns||[];
+      setTimeout(()=>{drawConns();fitAll();updateMM();scheduleSave();},80);
+      glog('done','Pipeline','system','Pipeline importado: '+nameLabel+' — '+nodes.length+' agentes');
+    }catch(err){
+      glog('error','Pipeline','system','Error al importar: '+err.message);
+    }
+  };
+  reader.readAsText(file);
+  input.value='';
+}
+
 function createDefaultNodes(){
   const rs=addNode('research',60,80);
   const hm=addNode('human',360,80);
@@ -1432,7 +2030,8 @@ function createDefaultNodes(){
   conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:rs.id,fp:'out',to:hm.id,tp:'in',active:false});
   conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:hm.id,fp:'out-y',to:pl.id,tp:'in',active:false,cond:true,condT:'yes'});
   conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:hm.id,fp:'out-n',to:rs.id,tp:'in',active:false,cond:true,condT:'no'});
-  conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:pl.id,fp:'out',to:pr.id,tp:'in',active:false});
+  conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:pl.id,fp:'out-y',to:pr.id,tp:'in',active:false,cond:true,condT:'yes'});
+  conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:pl.id,fp:'out-n',to:hm.id,tp:'in',active:false,cond:true,condT:'no'});
   conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:pr.id,fp:'out',to:im.id,tp:'in',active:false});
   conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:im.id,fp:'out',to:vi.id,tp:'in',active:false});
   conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:vi.id,fp:'out',to:as.id,tp:'in',active:false});
@@ -1725,9 +2324,11 @@ const AG_TO_TYPE={
 
 // Construye el canvas a partir del agent_menu del Arquitecto
 async function syncCanvasFromPipeline(pipelineId){
+  if(pipelineId!==currentPipelineId)return; // stale call — ignore
   try{
     const seed=await fetch('/api/pipelines/'+pipelineId+'/seed').then(r=>r.json()).catch(()=>null);
     if(!seed||!seed.agent_menu?.agentes){
+      hideCreatingAnimation();_pendingSeedPrompt=null;
       glog('warn','Canvas','system','El Arquitecto aún no generó el diseño del pipeline. Responde sus preguntas para que el canvas se construya.');
       return;
     }
@@ -1743,15 +2344,19 @@ async function syncCanvasFromPipeline(pipelineId){
 
     // Layout: calcular capas por dependencias
     const layers=buildLayers(agentes,orden);
-    const COL_W=320,ROW_H=280,START_X=80,START_Y=80;
+    const COL_W=380,ROW_H=310;
+    // Centre the entire grid around the canvas centre (3000, 2500)
+    const CANVAS_CX=3000,CANVAS_CY=2500;
+    const gridW=(layers.length-1)*COL_W;
+    const gridStartX=CANVAS_CX-gridW/2;
 
     layers.forEach((layer,col)=>{
-      const totalH=layer.length*ROW_H;
-      const startY=START_Y-(totalH/2)+500; // fixed canvas center offset
+      const totalH=(layer.length-1)*ROW_H;
+      const startY=CANVAS_CY-totalH/2;
       layer.forEach((agId,row)=>{
         const ag=agentes.find(a=>a.id===agId);if(!ag)return;
         const type=AG_TO_TYPE[agId]||'prompt';
-        const x=START_X+col*COL_W;
+        const x=gridStartX+col*COL_W;
         const y=startY+row*ROW_H;
         const tp=T[type]||{};
         const n={
@@ -1760,6 +2365,7 @@ async function syncCanvasFromPipeline(pipelineId){
           agentId:agId,
           rolEnPipeline:ag.rol_en_pipeline||'',
           status:'idle',img:null,promptOut:null,output:'',
+          model:DEFAULT_MODEL[type]||'claude-haiku-4-5',
           meta:ag.rol_en_pipeline||tp.meta||'',
           goal:tp.goal||'',
           inputType:tp.inputType||'json',
@@ -1780,6 +2386,39 @@ async function syncCanvasFromPipeline(pipelineId){
     // Crear conexiones basadas en orden_produccion
     buildConnections(orden);
 
+    hideCreatingAnimation();
+
+    const minX=nodes.reduce((m,n)=>Math.min(m,n.x),9999);
+    const avgY=nodes.length>0?nodes.reduce((s,n)=>s+n.y,0)/nodes.length:2500;
+    const pilotNode=nodes.find(n=>n.type==='pilot'||n.agentId==='AG-01');
+    const targetNode=pilotNode||nodes[0];
+
+    // ── Seed drop-card ──
+    const seedText=_pendingSeedPrompt||seed.seed_template?.descripcion||seed.agent_menu?.pipeline_id||'Pipeline';
+    _pendingSeedPrompt=null;
+    const seedCard=mkSeedCard(seedText,Math.max(100,minX-340),avgY-60);
+    if(targetNode){
+      conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:seedCard.id,fp:'out',to:targetNode.id,tp:'in',active:true,fromSeed:true,fromCard:true});
+    }
+
+    // ── Context card (a la derecha del piloto o del primer nodo) ──
+    const maxX=nodes.reduce((m,n)=>Math.max(m,n.x),0);
+    const ctxX=maxX+280;
+    const ctxY=pilotNode?(pilotNode.y-30):avgY-60;
+    fetch('/api/pipelines/'+pipelineId+'/context')
+      .then(r=>r.json())
+      .then(data=>mkContextCard(pipelineId,data?.context||{},ctxX,ctxY))
+      .catch(()=>mkContextCard(pipelineId,{estado:'iniciando',pipeline_name:pipelineId},ctxX,ctxY))
+      .finally(()=>drawConns());
+
+    // ── Stagger appearance animation ──
+    nodes.forEach((n,i)=>{
+      const el=document.getElementById(n.id);if(!el)return;
+      el.style.opacity='0';el.style.transform='translateY(16px)';
+      el.style.transition=`opacity .35s ease ${i*100}ms,transform .35s ease ${i*100}ms`;
+      setTimeout(()=>{el.style.opacity='1';el.style.transform='';},30+i*100);
+    });
+
     // Actualizar pipeline ID del canvas y guardar
     currentPipelineId=pipelineId;
     // Use pipeline DB name, or template_id as fallback (not the long descripcion)
@@ -1788,8 +2427,12 @@ async function syncCanvasFromPipeline(pipelineId){
     scheduleSave();
     setTimeout(()=>{drawConns();fitAll();updateMM();},200);
 
+    const labelClean=pipeLabel.replace(/_/g,' ');
+    stopTitleCycle('Pipeline · '+labelClean+' · '+nodes.length+' agentes');
     glog('done','Canvas','system','Canvas sincronizado — '+nodes.length+' agentes renderizados');
   }catch(err){
+    hideCreatingAnimation();_pendingSeedPrompt=null;
+    stopTitleCycle('Log Global — Pipeline');
     glog('warn','Canvas','system','Error sincronizando canvas: '+err.message);
   }
 }
@@ -1893,7 +2536,7 @@ function connectSSE(pipelineId){
   });
   es.addEventListener('pipeline_started',e=>{
     const d=JSON.parse(e.data);
-    startPipelineRunClock(d.timestamp);
+    if(_userStartedRun)startPipelineRunClock(d.timestamp);
     glog('action','Piloto','agent','Pipeline iniciado');
   });
   es.addEventListener('pipeline_tick',e=>{
@@ -2008,6 +2651,7 @@ async function sendTerminalInput(val){
     if(!res.ok||data.error){
       const raw=data.error||'Error desconocido';
       const friendly=parseAPIError(raw);
+      hideCreatingAnimation();_pendingSeedPrompt=null;
       glog('error','Terminal','system',friendly);
       terminalSetBusy(false);return;
     }
@@ -2020,6 +2664,8 @@ async function sendTerminalInput(val){
 
     if(data.pipeline_id&&data.pipeline_id!==terminalPipelineId){
       connectSSE(data.pipeline_id);
+      currentPipelineId=data.pipeline_id;
+      terminalPipelineId=data.pipeline_id;
       glog('think','Terminal','system','Pipeline activo: '+data.pipeline_id);
       if(data.seed_ready){
         glog('done','Canvas','system','Diseño listo — construyendo canvas...');
@@ -2028,6 +2674,7 @@ async function sendTerminalInput(val){
         setTimeout(()=>syncCanvasFromPipeline(data.pipeline_id),800);
       }
     } else if(data.seed_ready&&data.pipeline_id){
+      currentPipelineId=data.pipeline_id;
       glog('done','Canvas','system','Diseño listo — construyendo canvas...');
       setTimeout(()=>syncCanvasFromPipeline(data.pipeline_id),400);
     }
@@ -2037,6 +2684,7 @@ async function sendTerminalInput(val){
     }
   }catch(err){
     removeSpinner();
+    hideCreatingAnimation();_pendingSeedPrompt=null;
     glog('error','Terminal','system','Error de red: '+err.message);
   }finally{
     terminalSetBusy(false);
@@ -2063,7 +2711,7 @@ function parseAPIError(msg){
 // ══════════════════════════════
 document.addEventListener('keydown',e=>{
   if((e.key==='Delete'||e.key==='Backspace')&&document.activeElement===document.body)delSel();
-  if(e.key==='Escape'){connMode=false;setConnFrom(null);document.getElementById('connbtn').classList.remove('act');document.getElementById('tc').style.display='none';closeM();closeExpand();closeAgentBuilder();closeSkillAdapt();}
+  if(e.key==='Escape'){connMode=false;setConnFrom(null);document.getElementById('tc').style.display='none';closeM();closeExpand();closeAgentBuilder();closeSkillAdapt();}
   if(e.key==='f'||e.key==='F')fitAll();
   if(e.key==='r'||e.key==='R')runAll();
 });
@@ -2092,6 +2740,10 @@ document.addEventListener('keydown',e=>{
   } else {
     createDefaultNodes();
   }
+
+  // Models panel open by default
+  document.getElementById('mtwbtn').classList.add('act');
+  renderMTModels();renderMTTokens();startMTPoll();
 
   setTimeout(()=>{drawConns();fitAll();updateMM();},120);
   setTimeout(()=>{
@@ -2252,6 +2904,118 @@ async function resetTokens(){
   });
   document.addEventListener('mouseup',()=>{dr=false;});
 })();
+
+// ═══════════════════════════════════════
+// AI PROMPT SUGGESTIONS
+// ═══════════════════════════════════════
+const PROMPT_SUGGESTIONS={
+  pilot:{
+    prompt:[
+      'Eres el agente coordinador principal del pipeline. Recibe el objetivo, descompone las tareas, delega a subagentes especializados y monitorea el progreso. Consolida todos los resultados en un reporte JSON final. Nunca ejecutes tareas que correspondan a otro agente.',
+      'Actúa como orquestador del sistema. Analiza el input recibido, planifica la secuencia óptima de ejecución y asigna cada subtarea al agente más adecuado. Reporta el estado de cada subagente y genera un resumen ejecutivo al finalizar. Output: JSON.'
+    ],
+    verification:[
+      'Todos los subagentes deben reportar status "done". El JSON final debe incluir resultados de todos los agentes activos. No debe haber errores críticos sin resolver.',
+      'El pipeline completo debe ejecutarse sin interrupciones. Verificar que cada subagente devolvió output válido antes de consolidar. El resumen final debe incluir métricas de ejecución.'
+    ]
+  },
+  research:{
+    prompt:[
+      'Investiga exhaustivamente el tema dado. Busca tendencias actuales, datos de mercado y casos de uso relevantes. Analiza el potencial de engagement. Output JSON: { topic, trends[], insights[], sources[], top_ideas[] }.',
+      'Analiza el nicho indicado. Identifica los 10 temas con mayor potencial viral basándote en datos recientes. Para cada idea incluye: título, justificación, engagement_score (1-10) y formato recomendado.'
+    ],
+    verification:[
+      'Mínimo 5 ideas con engagement_score > 7. Todas las fuentes deben ser referenciadas. El JSON debe ser válido y seguir el schema definido.',
+      'El output debe incluir al menos 10 ideas rankeadas. Verificar que cada idea tenga engagement_score numérico. Las tendencias deben ser recientes (últimos 3 meses).'
+    ]
+  },
+  human:{
+    prompt:[
+      'PUNTO DE APROBACIÓN HUMANA. Presenta las opciones disponibles de forma clara y estructurada. Espera la decisión explícita del operador antes de continuar el pipeline. No tomes decisiones por cuenta propia.',
+      'Modo revisión humana activado. Resume los resultados de los agentes anteriores y presenta las opciones de acción disponibles. Requiere confirmación explícita del operador para proceder. Registra la decisión tomada.'
+    ],
+    verification:[
+      'El operador debe tomar una decisión explícita. No se permite continuar sin input humano. La decisión debe quedar registrada en el log.',
+      'Verificar que se recibió confirmación del operador. La decisión debe ser una de las opciones presentadas. Registrar timestamp de aprobación.'
+    ]
+  },
+  prompt:{
+    prompt:[
+      'Dado el guión recibido, genera un prompt detallado para cada escena de 8 segundos. Cada prompt debe especificar: plano de cámara, composición, iluminación, movimiento y transición. Output: array de strings, uno por escena.',
+      'Analiza el guión y crea prompts cinematográficos para generación de imagen por escena. Para cada escena incluye: tipo de plano, descripción del ambiente, paleta de colores, movimiento de cámara y efecto de transición al siguiente clip.'
+    ],
+    verification:[
+      'Cada prompt debe incluir: plano, luz, movimiento y transición. El número de prompts debe coincidir con el número de escenas del guión. Verificar coherencia visual entre escenas consecutivas.',
+      'Todos los prompts deben seguir el formato estándar. Verificar que no haya escenas sin prompt asignado. La coherencia de estilo visual debe mantenerse a lo largo de todo el video.'
+    ]
+  },
+  image:{
+    prompt:[
+      'Genera una imagen fotorrealista 16:9 para la escena indicada. Aplica el prompt exactamente como se especifica. Mantén coherencia de estilo con las escenas anteriores. Resolución objetivo: 1920×1080.',
+      'Crea una imagen de alta calidad basada en el prompt de escena recibido. Prioriza coherencia visual con el resto del pipeline. Estilo cinematográfico, iluminación dramática. Formato obligatorio: 16:9, 1920×1080px.'
+    ],
+    verification:[
+      'Ratio 16:9 obligatorio. Coherencia de estilo con escenas anteriores. Sin artefactos visuales ni distorsiones. La imagen debe representar fielmente el prompt recibido.',
+      'Verificar dimensiones 1920×1080. Revisar coherencia cromática con el resto de imágenes del pipeline. Confirmar que los elementos principales del prompt están presentes en la imagen.'
+    ]
+  },
+  video:{
+    prompt:[
+      'Convierte la imagen recibida en un clip de exactamente 8 segundos. Aplica el movimiento de cámara especificado en el prompt (push-in, pull-out, pan, etc.). Mantén suavidad en el movimiento. Output: MP4 H.264.',
+      'Anima la imagen estática en un clip de 8 segundos. Interpreta el movimiento de cámara del prompt de escena. Añade efectos de profundidad si el prompt lo indica. Asegura transiciones fluidas con el clip anterior y posterior.'
+    ],
+    verification:[
+      'Duración exacta de 8 segundos. Movimiento de cámara coherente con el prompt. Sin saltos ni glitches en la animación. Formato MP4 compatible con el ensamblaje final.',
+      'Verificar duración = 8.0s (±0.1s). El movimiento debe iniciarse suavemente y terminar en reposo. Sin frames duplicados ni corrupción de video. Resolución mínima 1920×1080.'
+    ]
+  },
+  assembly:{
+    prompt:[
+      'Ensambla todos los clips MP4 recibidos en el orden del guión. Aplica transiciones fluidas entre clips. Ajusta el audio si hay banda sonora. Duración objetivo: 30-130 segundos. Output: MP4 final.',
+      'Recibe el array de clips y el guión. Ordena los clips según la secuencia del guión. Aplica las transiciones especificadas. Renderiza el video final con audio normalizado. Verifica duración y calidad antes de entregar.'
+    ],
+    verification:[
+      'Duración en rango 30-130 segundos. Todas las transiciones deben ser fluidas. El orden de clips debe coincidir con el guión. Sin frames negros entre clips.',
+      'Verificar que todos los clips estén incluidos en el orden correcto. Sin artefactos de transición. El video final debe reproducirse sin interrupciones. Confirmar resolución y codec de salida.'
+    ]
+  },
+  _default:{
+    prompt:[
+      'Eres un agente especializado en el pipeline. Recibe el input del agente anterior, procesa la información según tu función específica y genera un output estructurado para el siguiente agente. Reporta cualquier error o caso edge detectado.',
+      'Procesa el input recibido con precisión y eficiencia. Valida el formato del input antes de procesar. Genera output consistente y bien estructurado. Incluye metadatos de ejecución en el resultado.'
+    ],
+    verification:[
+      'El output debe seguir el formato esperado por el agente siguiente. Sin datos nulos en campos obligatorios. El proceso debe completarse dentro del timeout configurado.',
+      'Verificar que el output es válido y completo. Todos los campos requeridos deben tener valores. El agente debe reportar status "done" al finalizar correctamente.'
+    ]
+  }
+};
+
+function showPromptSuggestions(event,nodeId,field){
+  event.stopPropagation();
+  document.querySelectorAll('.ai-suggest-dropdown').forEach(el=>el.remove());
+  const n=nodes.find(x=>x.id===nodeId);if(!n)return;
+  const sugs=(PROMPT_SUGGESTIONS[n.type]||PROMPT_SUGGESTIONS._default)[field]||PROMPT_SUGGESTIONS._default[field];
+  const btn=event.currentTarget;const rect=btn.getBoundingClientRect();
+  const dd=document.createElement('div');
+  dd.className='ai-suggest-dropdown';
+  dd.style.top=(rect.bottom+6)+'px';
+  dd.style.left=Math.min(rect.left,window.innerWidth-520)+'px';
+  dd.innerHTML=`<div style="font-size:9px;color:#c8a040;letter-spacing:.1em;margin-bottom:7px;text-transform:uppercase">✦ Sugerencias IA — ${field==='prompt'?'Prompt / Instrucciones':'Verificación automática'}</div>`
+    +sugs.map((s,i)=>`<div class="ai-suggest-opt" onclick="applyPromptSuggestion('${nodeId}','${field}',${i})">${s}</div>`).join('');
+  document.body.appendChild(dd);
+  setTimeout(()=>document.addEventListener('click',function close(e){
+    if(!dd.contains(e.target)){dd.remove();document.removeEventListener('click',close);}
+  }),10);
+}
+
+function applyPromptSuggestion(nodeId,field,index){
+  document.querySelectorAll('.ai-suggest-dropdown').forEach(el=>el.remove());
+  const n=nodes.find(x=>x.id===nodeId);if(!n)return;
+  const sugs=(PROMPT_SUGGESTIONS[n.type]||PROMPT_SUGGESTIONS._default)[field]||PROMPT_SUGGESTIONS._default[field];
+  n[field]=sugs[index];
+  renderM(n);
+}
 
 // Resize for mtwin
 (function(){

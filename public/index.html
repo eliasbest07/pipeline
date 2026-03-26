@@ -2,13 +2,171 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Pipeline OS v4</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;1,300&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/css/app.css">
+<link rel="stylesheet" href="/css/mobile.css">
 </head>
 <body>
 <canvas id="bg"></canvas>
 <div id="noise"></div>
+
+<!-- MOBILE APP (HTML estático — el CSS controla visibilidad) -->
+<div id="mobile-app">
+
+  <!-- HEADER -->
+  <div id="m-header">
+    <button id="m-menu-btn" aria-label="Menú">
+      <svg viewBox="0 0 16 12" width="16" height="12" fill="none" stroke="currentColor" stroke-width="1.5">
+        <line x1="0" y1="1.5" x2="16" y2="1.5"/>
+        <line x1="0" y1="6" x2="16" y2="6"/>
+        <line x1="0" y1="10.5" x2="16" y2="10.5"/>
+      </svg>
+    </button>
+    <div id="m-title-area">
+      <div id="m-title">Pipeline OS</div>
+      <div id="m-subtitle">v4</div>
+    </div>
+    <span id="m-timer">00:00</span>
+    <div id="m-header-actions">
+      <button class="m-hbtn" title="Ayuda">?</button>
+      <button class="m-hbtn" title="Info">!</button>
+      <button class="m-hbtn" title="Favoritos">♡</button>
+    </div>
+  </div>
+
+  <!-- HOME SCREEN -->
+  <div id="m-home" class="m-screen">
+    <div id="m-input-area">
+      <textarea id="m-main-input" rows="2" placeholder="Escribe tu idea de aplicación..."></textarea>
+      <button id="m-send-btn">↑</button>
+    </div>
+    <div id="m-tour-btn">
+      <span class="m-tour-icon">⚡</span>
+      <div class="m-tour-text">
+        <div class="m-tour-title">Tour interactivo</div>
+        <div class="m-tour-sub">Ve Pipeline OS en acción →</div>
+      </div>
+    </div>
+    <div id="m-suggestions"></div>
+  </div>
+
+  <!-- PIPELINE SCREEN -->
+  <div id="m-pipeline" class="m-screen hidden">
+    <div id="m-terminal"></div>
+    <div id="m-agents-area"></div>
+    <div id="m-stop-bar">
+      <button id="m-back-home-btn">← Inicio</button>
+      <button id="m-live-btn">● LIVE</button>
+      <button id="m-stop-btn">■ Detener</button>
+    </div>
+  </div>
+
+  <!-- AGENT EDIT SCREEN -->
+  <div id="m-agent-edit" class="m-screen hidden">
+    <div id="m-edit-header">
+      <button id="m-edit-back">←</button>
+      <div id="m-edit-title">Agente</div>
+      <button id="m-edit-save">Guardar</button>
+    </div>
+    <div id="m-edit-tabs">
+      <div class="m-edit-tab active" data-tab="cfg">Config</div>
+      <div class="m-edit-tab" data-tab="ctx">Contexto</div>
+      <div class="m-edit-tab" data-tab="tests">Tests</div>
+      <div class="m-edit-tab" data-tab="out">Output</div>
+    </div>
+    <div id="m-edit-body">
+      <div class="m-tab-panel active" data-panel="cfg">
+        <div class="m-field-group">
+          <label class="m-field-label">Nombre</label>
+          <input id="m-edit-name" class="m-field-input" type="text" placeholder="Nombre del agente">
+        </div>
+        <div class="m-field-group">
+          <label class="m-field-label">Objetivo</label>
+          <input id="m-edit-goal" class="m-field-input" type="text" placeholder="Objetivo del agente">
+        </div>
+        <div class="m-field-group">
+          <label class="m-field-label">Prompt del sistema</label>
+          <textarea id="m-edit-prompt" class="m-field-input m-field-textarea" placeholder="Instrucciones del sistema..."></textarea>
+        </div>
+      </div>
+      <div class="m-tab-panel" data-panel="ctx">
+        <div class="m-context-box">
+          <div class="m-context-label">Contexto del piloto</div>
+          <textarea id="m-edit-context" class="m-context-input" placeholder="El piloto enviará este contexto..."></textarea>
+        </div>
+        <div class="m-field-group" style="margin-top:8px">
+          <label class="m-field-label">Variables de entorno</label>
+          <textarea class="m-field-input m-field-textarea" placeholder="KEY=valor&#10;API_KEY=..."></textarea>
+        </div>
+      </div>
+      <div class="m-tab-panel" data-panel="tests">
+        <div class="m-field-group">
+          <label class="m-field-label">Input de prueba</label>
+          <textarea class="m-field-input m-field-textarea" placeholder="Escribe un input para probar el agente..."></textarea>
+        </div>
+        <div class="m-field-group">
+          <label class="m-field-label">Output esperado</label>
+          <textarea class="m-field-input m-field-textarea" placeholder="Describe el resultado esperado..."></textarea>
+        </div>
+      </div>
+      <div class="m-tab-panel" data-panel="out">
+        <div class="m-field-group">
+          <label class="m-field-label">Último output</label>
+          <div id="m-edit-output-display" class="m-field-input m-field-textarea" style="color:#9a9088;min-height:120px;overflow-y:auto">Sin output aún.</div>
+        </div>
+      </div>
+    </div>
+    <div id="m-edit-actions">
+      <button class="m-action-btn">⬡ Skills</button>
+      <button class="m-action-btn">✦ Agentes</button>
+      <button class="m-action-btn">👤 Human</button>
+      <button class="m-action-btn">◈ Modelo</button>
+    </div>
+  </div>
+
+</div><!-- /mobile-app -->
+
+<!-- MOBILE MENU OVERLAY + BOTTOM SHEET -->
+<div id="m-menu-overlay"></div>
+<div id="m-menu-sheet">
+  <div id="m-sheet-handle"></div>
+  <div id="m-sheet-header">
+    <span id="m-sheet-title">Pipelines</span>
+    <button id="m-sheet-new">+ Nuevo</button>
+  </div>
+  <div id="m-sheet-body">
+    <div class="m-sheet-sec">
+      <div class="m-sheet-sec-label">Mis Pipelines</div>
+      <div id="m-sheet-pipelines"></div>
+    </div>
+    <div class="m-sheet-divider"></div>
+    <div class="m-sheet-sec">
+      <div class="m-sheet-sec-label">Skills</div>
+      <div class="m-sheet-item">
+        <div class="m-sheet-dot" style="background:#2a6a8a"></div>
+        <span class="m-sheet-item-name">⌕ web_search</span>
+        <span class="m-sheet-item-sub">búsqueda</span>
+      </div>
+      <div class="m-sheet-item">
+        <div class="m-sheet-dot" style="background:#2a2a5a"></div>
+        <span class="m-sheet-item-name">📋 notion_mcp</span>
+        <span class="m-sheet-item-sub">MCP</span>
+      </div>
+      <div class="m-sheet-item">
+        <div class="m-sheet-dot" style="background:#2a1060"></div>
+        <span class="m-sheet-item-name">⬡ image_gen</span>
+        <span class="m-sheet-item-sub">imagen</span>
+      </div>
+    </div>
+    <div class="m-sheet-divider"></div>
+    <div class="m-sheet-sec">
+      <div class="m-sheet-sec-label">Agentes personalizados</div>
+      <div class="m-sheet-empty">Sin agentes creados aún</div>
+    </div>
+  </div>
+</div>
 
 <!-- SIDEBAR -->
 <div id="pback" onclick="closeSide()"></div>
@@ -67,11 +225,10 @@
   </button>
   <div class="tsep"></div>
   <button class="tb" onclick="addNodeCenter('pilot')">+ Nodo</button>
-  <button class="tb" id="connbtn" onclick="toggleConn()">⟶ Conectar</button>
-  <button class="tb" onclick="delSel()">✕ Borrar</button>
+<button class="tb" onclick="delSel()">✕ Borrar</button>
   <div class="tsep"></div>
   <button class="tb" id="run-btn-mini" onclick="runAll()">▶ Run</button>
-  <button class="tb" onclick="stopAll()">■ Stop</button>
+  <button class="tb" id="stop-btn-mini" onclick="stopAll()">■ Stop</button>
   <button class="tb" onclick="resetAll()">↺ Reset</button>
   <div class="tsep"></div>
   <button class="tb" onclick="fitAll()">⊞ Fit</button>
@@ -94,6 +251,7 @@
         <marker id="ma-y" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3z" fill="#2a5a2a"/></marker>
         <marker id="ma-n" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3z" fill="#5a2a2a"/></marker>
         <marker id="ma-card" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><path d="M0,0 L0,5 L5,2.5z" fill="#c8a04066"/></marker>
+        <marker id="ma-ctx" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3z" fill="#4a9aaa"/></marker>
       </defs>
       <path id="tc" d=""/>
     </svg>
@@ -106,7 +264,7 @@
 <div id="ctx"></div>
 
 <!-- MODELS & TOKENS WINDOW -->
-<div id="mtwin" style="display:none;height:300px">
+<div id="mtwin" style="display:flex;height:420px">
   <div id="mttbar">
     <div class="ltb-dots">
       <div class="ltb-dot close" onclick="toggleMTWin()" title="Cerrar"></div>
@@ -141,10 +299,10 @@
   <div id="logresize-w" title="Arrastrar para cambiar ancho"></div>
   <div id="logtbar">
     <div class="ltb-dots">
-      <div class="ltb-dot close" onclick="document.getElementById('logwin').style.display='none'" title="Cerrar"></div>
       <div class="ltb-dot min" onclick="toggleLogMin()" title="Minimizar"></div>
-      <div class="ltb-dot max" onclick="toggleLogMax()" title="Maximizar"></div>
+      <div class="ltb-dot max" onclick="toggleLogSpotlight()" title="Modo spotlight"></div>
     </div>
+    <span class="ltb-spinner" id="logtspinner"></span>
     <span class="ltb-title" id="logtitle">Log Global — Pipeline</span>
     <span class="ltb-badge" id="log-badge" onclick="window._ob&&window._ob.replay()">IDLE</span>
   </div>
@@ -169,6 +327,12 @@
     <input id="log-cmd" placeholder="/skill /agente /pipeline /help..." />
     <button id="log-cmd-send" onclick="parseLogCommand()">↵</button>
     <div id="cmd-hints"></div>
+  </div>
+  <div id="log-quickbtns">
+    <button class="lqb" onclick="newPipeline()">⊕ Nuevo pipeline</button>
+    <button class="lqb" onclick="exportPipeline()">↓ Exportar</button>
+    <button class="lqb lqb-import" onclick="importPipeline()">↑ Importar</button>
+    <input id="import-file-input" type="file" accept=".json" style="display:none" onchange="handleImportFile(this)">
   </div>
   <div id="logresize"></div>
 </div>
@@ -258,5 +422,6 @@
 
 <script src="/js/app.js"></script>
 <script src="/js/onboarding.js"></script>
+<script src="/js/mobile.js"></script>
 </body>
 </html>
