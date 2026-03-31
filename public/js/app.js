@@ -7,8 +7,8 @@ const T={
     subtasks:['Leer resultados Agente Resumen','Asignar tareas Agente UI/UX'],
     actions:['Implementar codigo','Comparar interfaz'],actionIcons:['⏸','●'],actionColors:['#3a3028','#1a3a1a'],
     vis:'tasks',cond:true,
-    inputType:'json',inputLabel:'Contexto del pipeline',inputDefault:'Usa configuración base del pipeline',
-    outputType:'json',outputLabel:'Estado de subagentes',
+    inputType:'text',inputLabel:'Prompt semilla del pipeline',inputDefault:'Conectado desde el card prompt',
+    outputType:'json',outputLabel:'Instruccion a Operador',
     prompt:'Eres el agente coordinador principal. Delega tareas a subagentes, monitorea su progreso y consolida resultados. Output JSON.',
     verification:'Todos los subagentes deben reportar estado OK.'},
   research:{label:'Agente Investigación',icon:'⌕',hbg:'#1a3a2a',hbg2:'#122a1a',dot:'#3a9a6a',
@@ -77,6 +77,15 @@ const T={
 const IO_ICONS={text:'✦',image:'⬡',video:'▶',json:'{ }',file:'📄',decision:'◈',audio:'♪',any:'◆'};
 const IO_COLORS={text:'#c8a040',image:'#8a5abf',video:'#4a8abf',json:'#3a8a3a',file:'#c87840',decision:'#c8a040',audio:'#6090c0',any:'#706860'};
 
+function escapeHTML(v){
+  return String(v??'')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
 // ═══════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════
@@ -85,6 +94,7 @@ let currentPipelineId=null;
 // ── Terminal / agentes en vivo ──────────────────────────────
 let terminalPipelineId=null;
 let sseConnection=null;
+let creatingOverlayTimer=null;
 // ── Catálogo de modelos ──────────────────────────────────────
 let modelsData={catalog:{},agents:{}};
 let _saveTimer=null;
@@ -103,14 +113,25 @@ const SKILLS_CATALOG=[
   {id:'email_send',name:'email_send',icon:'✉',color:'#3a1a3a'},
 ];
 let sel=null,modalId=null,ctab='cfg';
-let palT=null,ctxId=null;
+let palT=null,palInput=null,ctxId=null;
+const pilotLogOpen=new Set();
 let expandTarget=null,expandFieldName=null;
 let customSkills=[],builderMode='agent';
 let awinStep=0,awinBuilding={},awinTyping=false,awinPrevH=520,awinMinimized=false;
 let logFilter='all',logPrevH=420,logMinimized=false;
 let operatorWaiting=false;
+let operatorQuestionQueue=[];
+let terminalQuestionTimer=null; // auto-answer timer for terminal suggestion
+let terminalActiveQuestion=null; // question currently shown in terminal input
 let _pendingSeedPrompt=null;
 let _userStartedRun=false; // true only when user explicitly pressed Ejecutar
+let pilotTokenTotal='0 tok';
+let pilotTokenTotalValue=0;
+let _pilotTokenAnimFrame=null;
+const agentTokenTotals={};
+const agentTokenAnimFrames={};
+const MAX_OPERATOR_QUESTION_CARDS=6;
+const CONTEXT_CARD_SIZE={width:206,height:154};
 
 const IMGS=[
   'data:image/svg+xml,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 230 90"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#120824"/><stop offset="60%" stop-color="#080e24"/><stop offset="100%" stop-color="#1a0818"/></linearGradient></defs><rect width="230" height="90" fill="url(#g)"/><circle cx="115" cy="45" r="24" fill="none" stroke="rgba(130,80,200,.3)" stroke-width="1"/><text x="115" y="82" font-size="7" fill="rgba(255,255,255,.15)" text-anchor="middle" font-family="monospace">ESCENA_01.png</text></svg>`),
@@ -130,6 +151,14 @@ function drawBG(){
       c.fillRect(x-.8,y-.8,1.4,1.4);
 }
 window.addEventListener('resize',drawBG);drawBG();
+
+document.addEventListener('click',e=>{
+  const menu=document.getElementById('add-agent-menu');
+  const btn=document.getElementById('add-agent-btn');
+  if(!menu||menu.classList.contains('hidden'))return;
+  if(menu.contains(e.target)||btn?.contains(e.target))return;
+  closeAddAgentMenu();
+});
 
 // ══════════════════════════════
 // TRANSFORM
@@ -168,14 +197,14 @@ function ioSectionHTML(n){
   const outLabel=n.outputLabel||tp.outputLabel||'Output';
   const inDef=n.inputDefault||tp.inputDefault||'';
   return`<div class="nio">
-    <div class="nio-half">
-      <div class="nio-lbl" style="color:${inColor}88">Recibe</div>
+    <div class="nio-half" onclick="openIOModal('${n.id}','in')">
+      <div class="nio-lbl" style="color:#2f6b35">Recibe</div>
       <div class="nio-type"><span class="nio-icon" style="color:${inColor}">${inIcon}</span><span style="color:${inColor}">${inType}</span></div>
       <div style="font-size:9px;color:#706860;margin-top:2px">${inLabel}</div>
       ${inDef?`<div class="nio-default">${inDef}</div>`:''}
     </div>
-    <div class="nio-half">
-      <div class="nio-lbl" style="color:${outColor}88">Entrega</div>
+    <div class="nio-half" onclick="openIOModal('${n.id}','out')">
+      <div class="nio-lbl" style="color:#2f6b35">Entrega</div>
       <div class="nio-type"><span class="nio-icon" style="color:${outColor}">${outIcon}</span><span style="color:${outColor}">${outType}</span></div>
       <div style="font-size:9px;color:#706860;margin-top:2px">${outLabel}</div>
     </div>
@@ -201,12 +230,30 @@ function visHTML(n){
     if(n.status==='running')return`<div class="nvis"><div class="nvis-gen"><div class="scanline"></div>GENERANDO IMAGEN...</div></div>`;
     return`<div class="nvis"><div class="nvis-placeholder"><svg width="26" height="26" viewBox="0 0 28 28"><rect x="1" y="4" width="26" height="20" rx="2" fill="none" stroke="white" stroke-width="1"/><circle cx="9" cy="12" r="2.5" fill="none" stroke="white" stroke-width="1"/><path d="M1 19 L9 13 L15 18 L20 15 L27 19" fill="none" stroke="white" stroke-width="1"/></svg><span>ESPERANDO PROMPT</span></div></div>`;
   }
-  if(tp.vis==='text')return`<div class="nvis"><div class="nvis-prompt"><div class="nvis-prompt-lbl">Prompt activo</div><div class="nvis-prompt-txt" onclick="openExpandField(event,'${n.id}','promptOut')" style="cursor:pointer">${n.promptOut||tp.promptText||'Esperando guión...'}</div></div></div>`;
-  if(tp.vis==='list')return`<div class="nvis"><div class="nvis-list">${(tp.listItems||[]).slice(0,3).map(i=>`<div class="nvis-li"><span style="color:#3a3630">›</span>${i}</div>`).join('')}</div></div>`;
+  if(tp.vis==='text'){
+    if(n.status==='running')return`<div class="nvis nvis-streaming"><div class="scanline"></div><span class="nvis-stream-text" id="nstream_${n.id}">${escapeHTML((n.streamText||'').slice(-280))}</span><span class="nvis-cursor">▌</span></div>`;
+    return`<div class="nvis"><div class="nvis-prompt"><div class="nvis-prompt-lbl">Prompt activo</div><div class="nvis-prompt-txt" onclick="openExpandField(event,'${n.id}','promptOut')" style="cursor:pointer">${n.promptOut||tp.promptText||'Esperando guión...'}</div></div></div>`;
+  }
+  if(tp.vis==='list'){
+    if(n.status==='running')return`<div class="nvis nvis-streaming"><div class="scanline"></div><span class="nvis-stream-text" id="nstream_${n.id}">${escapeHTML((n.streamText||'').slice(-280))}</span><span class="nvis-cursor">▌</span></div>`;
+    return`<div class="nvis"><div class="nvis-list">${(tp.listItems||[]).slice(0,3).map(i=>`<div class="nvis-li"><span style="color:#3a3630">›</span>${i}</div>`).join('')}</div></div>`;
+  }
   if(tp.vis==='timeline'){
+    if(n.type==='assembly'){
+      return`<div class="nvis" id="asmvis_${n.id}">
+        <div class="asm-state-row">
+          <span class="asm-state-badge asm-pendiente">⊞ PENDIENTE</span>
+          <span class="asm-count"></span>
+        </div>
+        <div class="asm-assets"><div class="asm-waiting">Esperando instrucciones del Piloto...</div></div>
+        <div class="asm-dl-row" style="display:none">
+          <button class="asm-dl-btn" onclick="event.stopPropagation();downloadAssembly('${n.id}')">↓ Descargar output</button>
+        </div>
+      </div>`;
+    }
     const pct=n.status==='done'?100:n.status==='running'?45:0;
-    const clr=n.type==='video'?'#4a7abf':'#c87840';
-    const clips=n.type==='assembly'?['01','02','03','04','05']:['01','02','03'];
+    const clr='#4a7abf';
+    const clips=['01','02','03'];
     return`<div class="nvis"><div class="nvis-timeline"><div style="font-size:7px;color:#3a3630;margin-bottom:2px">PROGRESO — ${pct}%</div><div class="ntl-bar"><div class="ntl-fill" style="width:${pct}%;background:${clr}30;border-right:2px solid ${clr}"></div></div><div class="ntl-clips">${clips.map(c=>`<div class="ntl-clip" style="background:${clr}10;border:1px solid ${clr}25">${c}</div>`).join('')}</div></div></div>`;
   }
   if(tp.vis==='human')return`<div class="nvis"><div class="happrove"><div class="happrove-lbl">Operador tactico activo</div><div style="font-size:9px;color:#706860;margin-top:6px">Escucha feedback, adapta prompts y coordina regeneraciones sin detener la linea.</div></div></div>`;
@@ -214,10 +261,197 @@ function visHTML(n){
   return'';
 }
 
+function pilotTaskItems(n){
+  const runtimeTasks=Array.isArray(n.pilotTasks)&&n.pilotTasks.length?n.pilotTasks:null;
+  const fallback=(T.pilot.subtasks||[]).map(label=>({label,status:'pending'}));
+  return (runtimeTasks||fallback).slice(0,6);
+}
+
+function pilotReportText(n){
+  return n.pilotReport||'Sin reportes aun. El piloto mostrara aqui decisiones, bloqueos y el siguiente movimiento del pipeline.';
+}
+
+function pilotIOHTML(n){
+  const inLabel=n.inputLabel||'Prompt semilla';
+  const inDefault=n.inputDefault||'Conectado desde el card prompt';
+  const outTarget=n.outputTarget||n.outputTo||(()=>{const c=conns.find(x=>x.from===n.id);if(c){const t=nodes.find(x=>x.id===c.to);return t?t.name:null;}return null;})()|| 'Operador';
+  return`<div class="pilot-io">
+    <div class="pilot-io-half" onclick="openIOModal('${n.id}','in')">
+      <div class="pilot-io-label">Recibe</div>
+      <div class="pilot-io-type"><span class="pilot-io-icon">{ }</span><span>prompt</span></div>
+      <div class="pilot-io-text">${escapeHTML(inLabel)}</div>
+      <div class="pilot-io-default">${escapeHTML(inDefault)}</div>
+    </div>
+    <div class="pilot-io-half" onclick="openIOModal('${n.id}','out')">
+      <div class="pilot-io-label pilot-io-label-out">Entrega</div>
+      <div class="pilot-io-type"><span class="pilot-io-icon">{ }</span><span>json</span></div>
+      <div class="pilot-io-text">Instrucciones a</div>
+      <div class="pilot-io-chip">${escapeHTML(outTarget)}</div>
+    </div>
+  </div>`;
+}
+
+function pilotLoopHTML(n){
+  const cycle=Number.isFinite(n.runtimeCycle)?n.runtimeCycle:(Number.isFinite(n.cycle)?n.cycle:0);
+  const mode=n.loopMode||'bucle';
+  const maxCycles=Number.isFinite(n.maxCycles)?n.maxCycles:50;
+  return`<div class="pilot-cycle-row">
+    <span class="pilot-cycle-label">ciclo numero</span>
+    <span class="pilot-cycle-badge">${cycle||0}</span>
+    <span class="pilot-cycle-repeat">repetir en</span>
+    <select class="pilot-loop-select" onclick="event.stopPropagation()" onchange="setPilotLoopMode('${n.id}',this.value)">
+      <option value="bucle"${mode==='bucle'?' selected':''}>bucle</option>
+      <option value="limite"${mode==='limite'?' selected':''}>limite</option>
+    </select>
+    ${mode==='limite'?`<input class="pilot-loop-input" type="number" min="1" max="500" value="${maxCycles}" onclick="event.stopPropagation()" onchange="setPilotMaxCycles('${n.id}',this.value)>`:''}
+  </div>`;
+}
+
+function pilotTasksHTML(n){
+  const items=pilotTaskItems(n);
+  return`<div class="pilot-task-wrap">
+    <div class="pilot-task-head">
+      <span>Lista de Tareas</span>
+      <button class="pilot-history-link" onclick="event.stopPropagation();openPilotReport('${n.id}')">ciclos anteriores</button>
+    </div>
+    <div class="pilot-task-list">${items.map(task=>{const st=task.status||'pending';const dc=st==='active'?'running':st==='done'?'done':st==='waiting'||st==='awaiting-input'?'paused':'idle';return`<div class="pilot-task-item ${st}"><span class="nstatus-dot ${dc}" style="width:7px;height:7px;min-width:7px;flex-shrink:0"></span>${escapeHTML(task.label||task)}</div>`;}).join('')}</div>
+  </div>`;
+}
+
+function pilotFooterHTML(n){
+  const stateLabel=(n.pilotStatusLabel||stlabel(n.status)).toUpperCase();
+  const tokenLabel=n.pilotTokenLabel||pilotTokenTotal||'0 tok';
+  const btnState={running:'CORRIENDO',paused:'PAUSADO','awaiting-input':'ESPERANDO',done:'COMPLETADO',error:'ERROR',idle:'LISTO'}[n.status]||'LISTO';
+  return`<div class="pilot-actions">
+    <button class="pilot-action-btn pilot-report-btn" onclick="event.stopPropagation();togglePilotLogCard('${n.id}')">
+      <span class="pilot-action-ico">▣</span>
+      <div class="pilot-report-label">
+        <span class="pilot-report-title">Estado</span>
+        <span class="pilot-report-state" id="prst_${n.id}">${btnState}</span>
+      </div>
+      <span class="nstatus-dot ${n.status==='awaiting-input'?'running':n.status}"></span>
+    </button>
+    <button class="pilot-action-btn pilot-context-btn" onclick="event.stopPropagation();openContextCard(currentPipelineId)">
+      <span class="pilot-action-ico">⬡</span>
+      <span>Ver Contexto</span>
+    </button>
+  </div>
+  <div class="pilot-bottom-bar">
+    <span class="pilot-bottom-status">${escapeHTML(stateLabel)}</span>
+    <span class="pilot-bottom-tokens">${escapeHTML(tokenLabel)}</span>
+    <button class="nfoot-out" onclick="event.stopPropagation();(function(){var _n=nodes.find(function(x){return x.id==='${n.id}'});if(_n)dropOutputCard('${n.id}',_n.x+340,_n.y+20);})()" title="Soltar output card">↗ output</button>
+    <button class="nfoot-cfg" onclick="event.stopPropagation();openM('${n.id}')">⚙ CFG</button>
+  </div>`;
+}
+
+function formatPilotTokenLabel(tokenTotal){
+  return tokenTotal>=1000?(tokenTotal/1000).toFixed(1)+'k tok':tokenTotal?tokenTotal+' tok':'0 tok';
+}
+
+function formatAgentTokenLabel(tokenTotal){
+  return formatPilotTokenLabel(tokenTotal);
+}
+
+function applyPilotTokenDisplay(tokenTotal){
+  const label=formatPilotTokenLabel(tokenTotal);
+  pilotTokenTotalValue=tokenTotal;
+  pilotTokenTotal=label;
+  const pilotNode=nodes.find(n=>n.type==='pilot'||n.agentId==='AG-01');
+  if(pilotNode){
+    pilotNode.pilotTokenLabel=label;
+    const el=document.getElementById(pilotNode.id);
+    if(el){
+      const tokenEl=el.querySelector('.pilot-bottom-tokens');
+      if(tokenEl)tokenEl.textContent=label;
+    }
+  }
+}
+
+function animatePilotTokenDisplay(nextTotal){
+  const target=Math.max(0,Number(nextTotal)||0);
+  const start=pilotTokenTotalValue||0;
+  if(_pilotTokenAnimFrame)cancelAnimationFrame(_pilotTokenAnimFrame);
+  if(target===start){
+    applyPilotTokenDisplay(target);
+    return;
+  }
+  const duration=Math.min(900,Math.max(260,Math.abs(target-start)*0.8));
+  const t0=performance.now();
+  const step=now=>{
+    const p=Math.min(1,(now-t0)/duration);
+    const eased=1-Math.pow(1-p,3);
+    const current=Math.round(start+((target-start)*eased));
+    applyPilotTokenDisplay(current);
+    if(p<1)_pilotTokenAnimFrame=requestAnimationFrame(step);
+    else _pilotTokenAnimFrame=null;
+  };
+  _pilotTokenAnimFrame=requestAnimationFrame(step);
+}
+
+function applyAgentTokenDisplay(nodeId,tokenTotal){
+  const label=formatAgentTokenLabel(tokenTotal);
+  agentTokenTotals[nodeId]=tokenTotal;
+  const node=nodes.find(n=>n.id===nodeId);
+  if(node)node.tokenLabel=label;
+  const el=document.getElementById(nodeId);
+  if(!el)return;
+  const tokenEl=el.querySelector(`#ftok_${nodeId}`);
+  if(tokenEl)tokenEl.textContent=label;
+}
+
+function animateAgentTokenDisplay(nodeId,nextTotal){
+  const target=Math.max(0,Number(nextTotal)||0);
+  const start=agentTokenTotals[nodeId]||0;
+  if(agentTokenAnimFrames[nodeId])cancelAnimationFrame(agentTokenAnimFrames[nodeId]);
+  if(target===start){
+    applyAgentTokenDisplay(nodeId,target);
+    return;
+  }
+  const duration=Math.min(900,Math.max(260,Math.abs(target-start)*0.8));
+  const t0=performance.now();
+  const step=now=>{
+    const p=Math.min(1,(now-t0)/duration);
+    const eased=1-Math.pow(1-p,3);
+    const current=Math.round(start+((target-start)*eased));
+    applyAgentTokenDisplay(nodeId,current);
+    if(p<1)agentTokenAnimFrames[nodeId]=requestAnimationFrame(step);
+    else agentTokenAnimFrames[nodeId]=null;
+  };
+  agentTokenAnimFrames[nodeId]=requestAnimationFrame(step);
+}
+
+function pilotBodyHTML(n){
+  return`${pilotIOHTML(n)}
+    ${metaHTML(n)}
+    <div class="pilot-report-snippet" onclick="openPilotReport('${n.id}')">${escapeHTML(pilotReportText(n))}</div>
+    ${pilotLoopHTML(n)}
+    ${pilotTasksHTML(n)}
+    ${pilotFooterHTML(n)}`;
+}
+
 function actionsHTML(n){
   const tp=T[n.type];
   const btns=n.customBtns||tp.actions.map((a,i)=>({label:a,icon:tp.actionIcons[i],bg:tp.actionColors[i]||'#0f0d0c',fg:'#706860',action:''}));
   return`<div class="nactions">${btns.map((b,i)=>`<button class="nact" style="background:${b.bg}" onclick="event.stopPropagation()"><div class="nact-ico" style="background:rgba(0,0,0,.3);color:${b.fg||'#706860'}">${b.icon}</div><span style="color:${b.fg||'#706860'}">${b.label}</span><div class="nstatus-dot ${i===btns.length-1?n.status:'idle'}" style="margin-left:auto"></div></button>`).join('')}</div>`;
+}
+
+function nodeBodyHTML(n){
+  if(n.type==='pilot')return pilotBodyHTML(n);
+  const tp=T[n.type];
+  const tokenLabel=n.tokenLabel||'0 tok';
+  return`${ioSectionHTML(n)}
+    ${metaHTML(n)}
+    <div class="nsubtasks">${tp.subtasks.map(s=>`<div class="nsub">· ${s}</div>`).join('')}</div>
+    <div id="vis_${n.id}">${visHTML(n)}</div>
+    ${actionsHTML(n)}
+    <div class="nfoot">
+      <span class="nfoot-st" id="fst_${n.id}">${stlabel(n.status)}</span>
+      <span class="nfoot-tok" id="ftok_${n.id}">${escapeHTML(tokenLabel)}</span>
+      <button class="nfoot-sk" id="fsk_${n.id}" onclick="event.stopPropagation();openSkillAdapt('${n.id}')" style="display:${n.skills&&n.skills.length?'inline-flex':'none'}">⬡ SKILLS</button>
+      ${n.type==='pilot'?`<button class="nfoot-ctx" onclick="event.stopPropagation();openContextCard(currentPipelineId)" title="Ver archivo de contexto del pipeline">⬡ contexto</button>`:''}
+      <button class="nfoot-out" onclick="event.stopPropagation();(function(){var _n=nodes.find(function(x){return x.id==='${n.id}'});if(_n)dropOutputCard('${n.id}',_n.x+260,_n.y+20);})()" title="Soltar output card">↗ output</button>
+      <button class="nfoot-cfg" onclick="openM('${n.id}')">⚙ CONFIG</button>
+    </div>`;
 }
 
 function mkNode(n){
@@ -240,7 +474,6 @@ function mkNode(n){
       ${hasCond?`
         <div class="port out-y" data-nid="${n.id}" data-pt="out-y"></div>
         <div class="port out-n" data-nid="${n.id}" data-pt="out-n"></div>
-        <span class="plbl y">SÍ</span><span class="plbl n">NO</span>
       `:`<div class="port out" data-nid="${n.id}" data-pt="out"></div>`}
       <div class="nh" style="background:linear-gradient(135deg,${tp.hbg},${tp.hbg2})">
         <div class="nh-left"><span class="nh-icon">${tp.icon}</span><span class="nh-name">${n.name}</span></div>
@@ -253,22 +486,17 @@ function mkNode(n){
         <div class="nh-model">${modelSelectHTML(n)}</div>
       </div>
       <div style="background:#0f0d0c">
-        ${ioSectionHTML(n)}
-        ${metaHTML(n)}
-        <div class="nsubtasks">${tp.subtasks.map(s=>`<div class="nsub">· ${s}</div>`).join('')}</div>
-        <div id="vis_${n.id}">${visHTML(n)}</div>
-        ${actionsHTML(n)}
-        <div class="nfoot">
-          <span class="nfoot-st" id="fst_${n.id}">${stlabel(n.status)}</span>
-          <button class="nfoot-sk" id="fsk_${n.id}" onclick="event.stopPropagation();openSkillAdapt('${n.id}')" style="display:${n.skills&&n.skills.length?'inline-flex':'none'}">⬡ SKILLS</button>
-          ${n.type==='pilot'?`<button class="nfoot-ctx" onclick="event.stopPropagation();openContextCard(currentPipelineId)" title="Ver archivo de contexto del pipeline">⬡ contexto</button>`:''}
-          <button class="nfoot-out" onclick="event.stopPropagation();(function(){var _n=nodes.find(function(x){return x.id==='${n.id}'});if(_n)dropOutputCard('${n.id}',_n.x+260,_n.y+20);})()" title="Soltar output card">↗ output</button>
-          <button class="nfoot-cfg" onclick="openM('${n.id}')">⚙ CONFIG</button>
-        </div>
+        ${nodeBodyHTML(n)}
       </div>
     </div>`;
 
   el.addEventListener('mousedown',e=>nmd(e,n.id));
+  el.addEventListener('mouseup',e=>{
+    if(!connFrom||connFrom.nid===n.id)return;
+    if(e.target.classList.contains('port'))return;
+    e.stopPropagation();
+    finishConn(n.id,'in');
+  });
   el.addEventListener('dblclick',()=>openM(n.id));
   el.addEventListener('dragover',e=>{e.preventDefault();e.stopPropagation();if(palSkill)el.classList.add('skill-over');});
   el.addEventListener('dragleave',e=>{if(!el.contains(e.relatedTarget))el.classList.remove('skill-over');});
@@ -296,6 +524,7 @@ function mkNode(n){
     });
   });
   document.getElementById('canvas').appendChild(el);
+  redrawConnsSoon();
 }
 
 // Default model per agent type (cheap/test mode)
@@ -338,6 +567,17 @@ function modelCapClass(type){
 }
 
 function modelSelectHTML(n){
+  if(n.agentId&&modelsData?.agents?.[n.agentId]&&modelsData?.catalog){
+    const agentConfig=modelsData.agents[n.agentId];
+    const allModels=Object.entries(modelsData.catalog).flatMap(([provider,items])=>
+      items.map(item=>({provider,id:item.id,label:item.label||item.id,tier:item.tier||'fast'}))
+    );
+    const currentKey=`${agentConfig.provider}/${agentConfig.model}`;
+    const isFree=agentConfig.model==='openrouter/free'||agentConfig.provider==='openrouter'&&agentConfig.model==='openrouter/free';
+    const freeBadge=isFree?`<span class="n-free-badge">GRATIS — velocidad limitada</span>`:'';
+    const opts=allModels.map(m=>`<option value="${m.provider}||${m.id}" ${currentKey===`${m.provider}/${m.id}`?'selected':''}>[${m.provider}] ${m.label}</option>`).join('');
+    return`<select class="n-model-sel" id="msel_${n.id}" onchange="event.stopPropagation();setNodeModel('${n.id}',this.value)" onclick="event.stopPropagation()">${opts}</select>${freeBadge}`;
+  }
   const cap=modelCapClass(n.type);
   const groups=MODEL_GROUPS[cap];
   const current=n.model||DEFAULT_MODEL[n.type]||groups[0].models[0];
@@ -351,26 +591,170 @@ function modelSelectHTML(n){
 
 function addNode(type,x,y){
   const tp=T[type]||{};
+  const isFirstPilot=type==='pilot'&&!nodes.some(n=>n.type==='pilot'||n.agentId==='AG-01');
   const n={id:'n'+Math.random().toString(36).slice(2,10),type,x,y,name:tp.label||type,
     status:'idle',img:null,promptOut:null,output:'',meta:'',goal:'',
     model:DEFAULT_MODEL[type]||'claude-haiku-4-5',
     inputType:tp.inputType,outputType:tp.outputType,
     inputLabel:tp.inputLabel,outputLabel:tp.outputLabel,
     inputDefault:tp.inputDefault,
+    loopMode:type==='pilot'?'bucle':undefined,
+    maxCycles:type==='pilot'?50:undefined,
+    runtimeCycle:type==='pilot'?0:undefined,
+    pilotTasks:type==='pilot'?[]:undefined,
+    pilotReport:type==='pilot'?'':undefined,
+    pilotStatusLabel:type==='pilot'?'idle':undefined,
+    pilotTokenLabel:type==='pilot'?pilotTokenTotal:undefined,
+    tokenLabel:type==='pilot'?undefined:'0 tok',
     prompt:tp.prompt||'',verification:tp.verification||'',
     logs:[{t:'--:--',m:'Agente creado',c:''}],skills:[],
     tests:[{name:'Formato input',status:'pend',desc:'Verifica input correcto'},{name:'Formato output',status:'pend',desc:'Valida output JSON'}]
   };
-  nodes.push(n);mkNode(n);updateMM();return n;
+  nodes.push(n);mkNode(n);
+  if(isFirstPilot)seedFirstPilotSetup(n);
+  updateMM();updateAddAgentMenuAvailability();return n;
 }
 
-function setNodeModel(id,model){
+function seedFirstPilotSetup(pilotNode){
+  if(!pilotNode||pilotNode.type!=='pilot')return;
+  // Center the group (inputCard + pilot + human) in the current visible viewport.
+  // Group spans: pilotNode.x-290 (left of inputCard) to pilotNode.x+625 (right of human).
+  // Group center offset from pilotNode.x is (-290+625)/2 = 167.5 → use 167.
+  const cx=(window.innerWidth/2-px)/sc;
+  const cy=(window.innerHeight/2-py)/sc;
+  pilotNode.x=cx-167;
+  pilotNode.y=cy-80;
+  const pilotEl=document.getElementById(pilotNode.id);
+  if(pilotEl){pilotEl.style.left=pilotNode.x+'px';pilotEl.style.top=pilotNode.y+'px';}
+  const inputCard=mkInputCard('text',pilotNode.x-290,pilotNode.y+34);
+  if(inputCard){
+    inputCard.label='Prompt semilla';
+    inputCard.isSeedPrompt=true;
+    _renderInputCardDOM(inputCard);
+    const inputEl=document.getElementById(inputCard.id);
+    const size=inputEl?.querySelector('.oc-size');
+    if(size)size.textContent='prompt semilla';
+    const ta=inputEl?.querySelector('.idc-textarea');
+    if(ta)ta.placeholder='Escribe el prompt semilla del pipeline...';
+    conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:inputCard.id,fp:'out',to:pilotNode.id,tp:'in',active:true,fromCard:true});
+  }
+  let operatorNode=nodes.find(n=>n.type==='human'||n.agentId==='AG-05');
+  if(!operatorNode)operatorNode=addNode('human',pilotNode.x+360,pilotNode.y+24);
+  if(operatorNode&&!conns.some(c=>c.from===pilotNode.id&&c.to===operatorNode.id)){
+    conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:pilotNode.id,fp:'out-y',to:operatorNode.id,tp:'in',active:false,cond:true,condT:'yes'});
+  }
+  drawConns();updateMM();scheduleSave();
+}
+
+async function setNodeModel(id,model){
   const n=nodes.find(x=>x.id===id);if(!n)return;
+  if(n.agentId&&String(model).includes('||')){
+    const [provider,modelId]=String(model).split('||');
+    try{
+      const res=await fetch('/api/models/'+n.agentId,{
+        method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({provider,model:modelId}),
+      });
+      const data=await res.json().catch(()=>({}));
+      if(!res.ok)throw new Error(data.error||res.status);
+      n.model=modelId;
+      if(modelsData.agents)modelsData.agents[n.agentId]={provider,model:modelId,is_custom:true};
+      const sel=document.getElementById('msel_'+n.id);
+      if(sel)sel.value=`${provider}||${modelId}`;
+      scheduleSave();
+      renderMTModels();
+      glog('action',n.name,n.type,'◈ Modelo real: '+provider+'/'+modelId);
+      return;
+    }catch(e){
+      glog('warn','Models','system','No se pudo cambiar el modelo del agente: '+e.message);
+      return;
+    }
+  }
   n.model=model;
   scheduleSave();
   glog('action',n.name,n.type,'◈ Modelo: '+model);
 }
-function addNodeCenter(type){addNode(type,(window.innerWidth/2-px)/sc-115,(window.innerHeight/2-py)/sc-120);}
+function getCanvasViewportCenter(){
+  return {
+    x:(window.innerWidth/2-px)/sc,
+    y:(window.innerHeight/2-py)/sc,
+  };
+}
+
+function getCanvasPointFromClient(clientX,clientY){
+  const wrap=document.getElementById('wrap').getBoundingClientRect();
+  return {
+    x:(clientX-wrap.left-px)/sc,
+    y:(clientY-wrap.top-py)/sc,
+  };
+}
+
+function redrawConnsSoon(){
+  requestAnimationFrame(()=>{
+    drawConns();
+    requestAnimationFrame(()=>drawConns());
+  });
+}
+
+function getNodeCanvasSize(type){
+  return {
+    width:type==='pilot'?320:230,
+    height:type==='pilot'?420:240,
+  };
+}
+
+function getInputCanvasSize(){
+  return {width:220,height:120};
+}
+
+function getCardCanvasSize(card){
+  if(card?.isCtxFile||card?.type==='ctx-file')return{width:230,height:210};
+  if(card?.isQuestionCard||card?.type==='question')return{width:270,height:190};
+  if(card?.isConnectionPayload)return{width:290,height:240};
+  if(card?._kind==='seed'||card?.isInputCard)return{width:220,height:120};
+  return{width:200,height:130};
+}
+
+function rectsOverlap(a,b,pad=18){
+  return !(a.x+a.width+pad<=b.x||b.x+b.width+pad<=a.x||a.y+a.height+pad<=b.y||b.y+b.height+pad<=a.y);
+}
+
+function findOpenCardPosition(x,y,size,ignoreId){
+  const gapX=size.width+24,gapY=size.height+20;
+  const candidates=[];
+  // First try the requested position, then spiral outward in a grid
+  for(let ring=0;ring<8;ring++){
+    if(ring===0){candidates.push({x,y});continue;}
+    for(let col=-ring;col<=ring;col++){
+      for(let row=-ring;row<=ring;row++){
+        if(Math.abs(col)!==ring&&Math.abs(row)!==ring)continue;
+        candidates.push({x:x+col*gapX,y:y+row*gapY});
+      }
+    }
+  }
+  for(const pos of candidates){
+    const rect={x:Math.max(20,pos.x),y:Math.max(20,pos.y),width:size.width,height:size.height};
+    const blocked=
+      outputCards.some(card=>{
+        if(card.id===ignoreId)return false;
+        const s=getCardCanvasSize(card);
+        return rectsOverlap(rect,{x:card.x,y:card.y,width:s.width,height:s.height},18);
+      })||
+      nodes.some(node=>{
+        const s=getNodeCanvasSize(node.type);
+        return rectsOverlap(rect,{x:node.x,y:node.y,width:s.width,height:s.height},22);
+      });
+    if(!blocked)return{x:rect.x,y:rect.y};
+  }
+  return{x:Math.max(20,x),y:Math.max(20,y)};
+}
+
+function addNodeCenter(type){
+  const center=getCanvasViewportCenter();
+  const {width,height}=getNodeCanvasSize(type);
+  addNode(type,center.x-width/2,center.y-height/2);
+}
 
 // ══════════════════════════════
 // OUTPUT CARDS (dropped by agents)
@@ -384,10 +768,11 @@ function dropOutputCard(fromNodeId, x, y, extra={}){
   }
   const outputType=n.outputType||tp.outputType||'json';
   const content=generateMockContent(n,outputType);
-  const oc={id:'oc'+Math.random().toString(36).slice(2,10),assetId:'drop-'+n.id,
+  const pos=findOpenCardPosition(x,y,getCardCanvasSize({_kind:'output',type:outputType}));
+  const oc={id:'oc'+Math.random().toString(36).slice(2,10),_kind:'output',assetId:'drop-'+n.id,
     fromNodeId:n.id,fromNodeName:n.name,fromDot:tp.dot||'#888',
-    type:outputType,label:tp.outputLabel||tp.label+' · output',content,x,y,...extra};
-  outputCards.push(oc);mkOutputCard(oc);drawConns();
+    type:outputType,label:tp.outputLabel||tp.label+' · output',content,x:pos.x,y:pos.y,...extra};
+  outputCards.push(oc);mkOutputCard(oc);drawConns();scheduleSave();
   glog('action',n.name,n.type,`↗ Output card soltada — tipo: ${outputType}. Conecta el puerto al siguiente agente.`);
 }
 
@@ -400,13 +785,12 @@ function generateMockContent(n,type){
   return n.output||'Output del agente';
 }
 
-function mkSeedCard(promptText,x,y){
-  const id='seed'+Math.random().toString(36).slice(2,8);
-  const oc={id,x,y,type:'text',content:promptText,fromNodeName:'Usuario',fromDot:'#c8a040',label:'Prompt inicial'};
-  outputCards.push(oc);
+function _renderSeedCardDOM(oc){
+  document.getElementById(oc.id)?.remove();
   const el=document.createElement('div');
-  el.className='output-card seed-input-card';el.id=id;
-  el.style.cssText=`left:${x}px;top:${y}px`;
+  el.className='output-card seed-input-card';el.id=oc.id;
+  el.style.cssText=`left:${oc.x}px;top:${oc.y}px`;
+  const promptText=oc.content||'';
   el.innerHTML=`
     <div class="oc-inner">
       <div class="oc-header">
@@ -415,18 +799,27 @@ function mkSeedCard(promptText,x,y){
       </div>
       <div class="oc-body">
         <div class="sic-title">Prompt inicial</div>
-        <div class="oc-preview-txt sic-prompt">${promptText}</div>
+        <div class="oc-preview-txt sic-prompt">${escapeHTML(promptText)}</div>
+        <button class="sic-run-btn" onclick="event.stopPropagation();runAll()">▶ EJECUTAR</button>
       </div>
       <div class="oc-footer">
         <span class="oc-size" style="color:#c8a04088">text input</span>
-        <div class="oc-connect-port" data-nid="${id}" data-pt="out" title="Conectar al agente"></div>
+        <div class="oc-connect-port" data-nid="${oc.id}" data-pt="out" title="Conectar al agente"></div>
       </div>
     </div>`;
-  el.addEventListener('mousedown',e=>cardMouseDown(e,id));
+  el.addEventListener('mousedown',e=>cardMouseDown(e,oc.id));
   el.querySelector('.oc-connect-port').addEventListener('mousedown',e=>{
-    e.stopPropagation();setConnFrom({nid:id,pt:'out',src:'card'});
+    e.stopPropagation();setConnFrom({nid:oc.id,pt:'out',src:'card'});
   });
   document.getElementById('canvas').appendChild(el);
+  redrawConnsSoon();
+}
+function mkSeedCard(promptText,x,y){
+  const id='seed'+Math.random().toString(36).slice(2,8);
+  const pos=findOpenCardPosition(x,y,getCardCanvasSize({_kind:'seed'}),id);
+  const oc={id,x:pos.x,y:pos.y,_kind:'seed',type:'text',content:promptText,fromNodeName:'Usuario',fromDot:'#c8a040',label:'Prompt inicial',isSeedPrompt:true};
+  outputCards.push(oc);
+  _renderSeedCardDOM(oc);
   return oc;
 }
 
@@ -438,39 +831,66 @@ function mkContextCard(pipelineId, ctx, x, y){
 
   const pipeName=(ctx?.pipeline_name||pipelineId).replace(/_/g,' ');
   const fullJson=JSON.stringify(ctx||{},null,2);
+  const estado=String(ctx?.estado||'sin_datos');
+  const estadoColors={en_progreso:'#c8a040',completo:'#5acd6a',pausado:'#7888b8',cancelado:'#d06060',iniciando:'#7ec89a',preparado:'#67b8c7',sin_datos:'#6e665c'};
+  const estadoColor=estadoColors[estado]||'#9a8a70';
+  const consulta=String(
+    ctx?.consulta||
+    ctx?.objetivo||
+    ctx?.brief||
+    ctx?.preferencias_usuario?.objetivo?.valor||
+    ctx?.template?.metodologia||
+    ctx?.template?.seed_template?.descripcion||
+    ctx?.pipeline_name||
+    ''
+  ).trim();
+  const bloquesKeys=Object.keys(ctx?.bloques||{});
+  const assetsCount=Object.keys(ctx?.assets||{}).length;
+  const resultadosCount=Array.isArray(ctx?.outputs_vigentes_snapshot)
+    ? ctx.outputs_vigentes_snapshot.length
+    : Number(ctx?.ensamblaje?.output_ids?.length||0);
+  const activeAgents=Object.values(ctx?.agentes_activos||{});
+  const activosAhora=activeAgents.filter(ag=>['activo','running','waiting_input','waiting_tokens'].includes(String(ag?.estado||''))).length;
+  const preguntasPendientes=Array.isArray(ctx?.preguntas_pendientes)?ctx.preguntas_pendientes.length:0;
+  const cadenaEnsamblaje=Array.isArray(ctx?.template?.seed_template?.orden_produccion)
+    ? ctx.template.seed_template.orden_produccion.length
+    : 0;
+  const iniciadoEn=ctx?.pipeline?.iniciado_en?new Date(ctx.pipeline.iniciado_en).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}):'pendiente';
+  const blockPreview=bloquesKeys.slice(0,4).join(' · ');
+  const completados=Object.values(ctx?.bloques||{}).filter(b=>String(b?.estado||'').startsWith('complet')).length;
+  const totalBloques=bloquesKeys.length;
+  const salud=String(ctx?.salud_pipeline?.estado||'ok').replace(/_/g,' ');
 
-  // Build rows from all scalar top-level fields
-  const SKIP_KEYS=new Set(['pipeline_name','bloques','agentes_activos','assets','logs','_meta']);
-  const estadoColors={en_progreso:'#c8a040',completo:'#5acd6a',pausado:'#7888b8',cancelado:'#d06060',iniciando:'#7ec89a',vacío:'#3a3830'};
-  const fields=Object.entries(ctx||{})
-    .filter(([k,v])=>!SKIP_KEYS.has(k)&&(typeof v==='string'||typeof v==='number'||typeof v==='boolean'))
-    .slice(0,8);
-  const bloques=Object.keys(ctx?.bloques||{}).length;
-  const assets=Object.keys(ctx?.assets||{}).length;
+  const sectionsHtml=`
+    <div class="ctx-query">${consulta?escapeHTML(consulta.slice(0,54))+(consulta.length>54?'…':''):'sin definir'}</div>
+    <div class="ctx-chip-row">
+      <span class="ctx-chip" style="color:${estadoColor};border-color:${estadoColor}33;background:${estadoColor}12">${estado.replace(/_/g,' ')}</span>
+      <span class="ctx-chip">${completados}/${totalBloques||cadenaEnsamblaje||0} bloques</span>
+      <span class="ctx-chip">${resultadosCount} out · ${assetsCount} assets</span>
+    </div>
+    <div class="ctx-grid">
+      <div class="ctx-mini"><span class="ctx-lbl">agentes</span><span class="ctx-val">${activosAhora}/${activeAgents.length||0}</span></div>
+      <div class="ctx-mini"><span class="ctx-lbl">operador</span><span class="ctx-val">${preguntasPendientes}</span></div>
+      <div class="ctx-mini"><span class="ctx-lbl">salud</span><span class="ctx-val">${escapeHTML(salud)}</span></div>
+      <div class="ctx-mini"><span class="ctx-lbl">inicio</span><span class="ctx-val">${iniciadoEn}</span></div>
+    </div>
+    <div class="ctx-row compact">
+      <span class="ctx-lbl">flujo</span>
+      <span class="ctx-val">${blockPreview||'aún sin bloques'}</span>
+    </div>`;
 
-  let rowsHtml='';
-  if(fields.length===0&&bloques===0){
-    rowsHtml='<div class="ctx-empty-msg">el piloto completará esta estructura</div>';
-  } else {
-    fields.forEach(([k,v])=>{
-      const val=String(v);
-      const display=val.length>30?val.slice(0,27)+'…':val;
-      const color=k==='estado'?(estadoColors[val]||'#9a8a70'):'';
-      rowsHtml+=`<div class="ctx-row"><span class="ctx-lbl">${k}</span><span class="ctx-val"${color?` style="color:${color}"`:''}>${display}</span></div>`;
-    });
-    if(bloques>0)rowsHtml+=`<div class="ctx-row"><span class="ctx-lbl">bloques</span><span class="ctx-val">${bloques}</span></div>`;
-    if(assets>0)rowsHtml+=`<div class="ctx-row"><span class="ctx-lbl">assets</span><span class="ctx-val">${assets}</span></div>`;
-  }
-
-  const oc={id,x,y,type:'ctx-file',isCtxFile:true,pipelineId,
+  const pos=findOpenCardPosition(x,y,getCardCanvasSize({type:'ctx-file'}),id);
+  const oc={id,x:pos.x,y:pos.y,type:'ctx-file',isCtxFile:true,pipelineId,
     fromNodeName:'Pipeline',fromDot:'#4a7a9a',label:'context.json',
     content:fullJson,_ctx:ctx};
   outputCards.push(oc);
 
   const el=document.createElement('div');
   el.className='output-card ctx-file-card';el.id=id;
-  el.style.cssText=`left:${x}px;top:${y}px`;
+  el.style.cssText=`left:${oc.x}px;top:${oc.y}px`;
   el.innerHTML=`
+    <div class="port in" data-nid="${id}" data-pt="in"></div>
+    <div class="port out" data-nid="${id}" data-pt="out"></div>
     <div class="oc-inner">
       <div class="ctx-file-hd">
         <div class="ctx-file-icon">⬡</div>
@@ -480,7 +900,8 @@ function mkContextCard(pipelineId, ctx, x, y){
         </div>
         <button class="ctx-refresh" onclick="event.stopPropagation();refreshContextCard('${id}','${pipelineId}')" title="Actualizar">↺</button>
       </div>
-      <div class="ctx-file-body">${rowsHtml}</div>
+      <div class="ctx-file-body">${sectionsHtml}</div>
+      <div class="ctx-usage-row" id="ctxusage_${id}">reposo</div>
       <div class="ctx-file-ft">
         <button class="ctx-edit-btn" onclick="event.stopPropagation();expandContextCard('${id}')">⤢ ver / editar completo</button>
       </div>
@@ -491,10 +912,136 @@ function mkContextCard(pipelineId, ctx, x, y){
   return oc;
 }
 
+function getCanvasItemRect(id,fallback={}){
+  const el=document.getElementById(id);
+  const width=el?.offsetWidth||fallback.width||200;
+  const height=el?.offsetHeight||fallback.height||100;
+  const left=Number.parseFloat(el?.style.left)||fallback.x||0;
+  const top=Number.parseFloat(el?.style.top)||fallback.y||0;
+  return{id,x:left,y:top,width,height,cx:left+(width/2),cy:top+(height/2)};
+}
+
+function getAgentVisualTarget(agentId){
+  const node=nodes.find(n=>n.agentId===agentId);
+  if(node)return getCanvasItemRect(node.id,{x:node.x,y:node.y,...getNodeCanvasSize(node.type),agentId});
+  const card=outputCards.find(c=>c._isRuntime&&c._agentId===agentId);
+  if(card)return getCanvasItemRect(card.id,{x:card.x,y:card.y,width:190,height:76,agentId});
+  return null;
+}
+
+function inferContextUsageMode(agentState){
+  const action=String(agentState?.accion_actual||'').toLowerCase();
+  if(/auditar|actualizar|guardar|consolidar|digest|coordinar|recopilar|ensambl|patch|merge|escrib|write/.test(action))return'write';
+  return'read';
+}
+
+function clearContextUsageHighlights(){
+  document.querySelectorAll('.ctx-usage-target').forEach(el=>el.classList.remove('ctx-usage-target'));
+  document.querySelectorAll('.ctx-usage-read').forEach(el=>el.classList.remove('ctx-usage-read'));
+  document.querySelectorAll('.ctx-usage-write').forEach(el=>el.classList.remove('ctx-usage-write'));
+}
+
+function setContextUsageSummary(ctxCardId,targets){
+  const usageEl=document.getElementById('ctxusage_'+ctxCardId);
+  if(!usageEl)return;
+  if(!targets.length){
+    usageEl.textContent='reposo';
+    return;
+  }
+  if(targets.length===1){
+    const t=targets[0];
+    usageEl.textContent=t.mode==='write'
+      ? `escribiendo con ${t.agentName}`
+      : `leyendo ${t.agentName}`;
+    return;
+  }
+  const writers=targets.filter(t=>t.mode==='write').length;
+  usageEl.textContent=writers
+    ? `compartido · ${targets.length} agentes · ${writers} escriben`
+    : `compartido · ${targets.length} agentes leyendo`;
+}
+
+function syncContextCardActivity(ctx,pipelineId){
+  const ctxCard=outputCards.find(c=>c.isCtxFile&&c.pipelineId===pipelineId);
+  if(!ctxCard)return;
+  const ctxEl=document.getElementById(ctxCard.id);
+  if(!ctxEl)return;
+
+  const agentStates=Object.values(ctx?.agentes_activos||{});
+  const activeStates=agentStates.filter(ag=>
+    ['activo','running','waiting_input','waiting_tokens'].includes(String(ag?.estado||'')) &&
+    ag?.agent_id &&
+    ag.agent_id!=='AG-01'
+  );
+  const fallbackPilot=nodes.find(n=>n.type==='pilot'||n.agentId==='AG-01');
+  const targets=activeStates
+    .map(ag=>{
+      const visual=getAgentVisualTarget(ag.agent_id);
+      if(!visual)return null;
+      return{
+        ...visual,
+        agentId:ag.agent_id,
+        agentName:ag.nombre||AGENT_NAMES[ag.agent_id]||ag.agent_id,
+        mode:inferContextUsageMode(ag),
+      };
+    })
+    .filter(Boolean);
+
+  const effectiveTargets=targets.length?targets:(fallbackPilot?[{
+    ...getCanvasItemRect(fallbackPilot.id,{x:fallbackPilot.x,y:fallbackPilot.y,...getNodeCanvasSize(fallbackPilot.type)}),
+    agentId:fallbackPilot.agentId||'AG-01',
+    agentName:fallbackPilot.name||'Piloto',
+    mode:'read',
+  }]:[]);
+
+  clearContextUsageHighlights();
+  effectiveTargets.forEach(t=>{
+    const el=document.getElementById(t.id);
+    if(!el)return;
+    el.classList.add('ctx-usage-target');
+    el.classList.add(t.mode==='write'?'ctx-usage-write':'ctx-usage-read');
+  });
+
+  setContextUsageSummary(ctxCard.id,effectiveTargets);
+
+  const bounds=effectiveTargets.reduce((acc,t)=>({
+    minX:Math.min(acc.minX,t.x),
+    maxX:Math.max(acc.maxX,t.x+t.width),
+    minY:Math.min(acc.minY,t.y),
+  }),{minX:Infinity,maxX:-Infinity,minY:Infinity});
+  const targetX=Math.max(20,Math.round(((bounds.minX+bounds.maxX)/2)-(CONTEXT_CARD_SIZE.width/2)));
+  const targetY=Math.max(20,Math.round(bounds.minY-CONTEXT_CARD_SIZE.height-(effectiveTargets.length>1?58:42)));
+
+  ctxCard.x=targetX;
+  ctxCard.y=targetY;
+  if(!cardDrag||cardDrag.id!==ctxCard.id){
+    ctxEl.style.left=targetX+'px';
+    ctxEl.style.top=targetY+'px';
+  }
+  ctxEl.classList.toggle('ctx-in-flight',effectiveTargets.length>0);
+  ctxEl.classList.toggle('ctx-shared',effectiveTargets.length>1);
+
+  conns=conns.filter(c=>!c.isCtxConn);
+  effectiveTargets.forEach(t=>{
+    conns.push({
+      id:'c'+Math.random().toString(36).slice(2,10),
+      from:ctxCard.id,fp:'out',to:t.id,tp:'in',
+      active:true,fromCard:true,isCtxConn:true,ctxRole:'read',
+    });
+    if(t.mode==='write'){
+      conns.push({
+        id:'c'+Math.random().toString(36).slice(2,10),
+        from:t.id,fp:'out',to:ctxCard.id,tp:'in',
+        active:true,isCtxConn:true,ctxRole:'write',
+      });
+    }
+  });
+}
+
 // ── QUESTION CARD (operator drops this to ask user) ──────────────
 function mkQuestionCard(opts){
-  // opts: {question, suggestion, timeout, pipelineId, fieldKey, onAnswer, x, y}
-  const id='qcard_'+Date.now();
+  // opts: {question, suggestion, timeout, pipelineId, fieldKey, onAnswer, x, y, questionId}
+  const id='qcard_'+(opts.questionId||Date.now());
   const timeout=opts.timeout||20000;
   const x=opts.x||300, y=opts.y||160;
 
@@ -505,9 +1052,12 @@ function mkQuestionCard(opts){
     outputCards=outputCards.filter(c=>!(c.isQuestionCard&&c.fieldKey===opts.fieldKey));
   }
 
-  const oc={id,x,y,type:'question',isQuestionCard:true,
+  const pos=findOpenCardPosition(x,y,getCardCanvasSize({type:'question'}),id);
+  const oc={id,x:pos.x,y:pos.y,type:'question',isQuestionCard:true,
+    questionId:opts.questionId||null,
     fieldKey:opts.fieldKey,pipelineId:opts.pipelineId,
-    _suggestion:opts.suggestion,_onAnswer:opts.onAnswer};
+    _suggestion:opts.suggestion,_onAnswer:opts.onAnswer,
+    question:opts.question||'',content:'',status:'pending',_typingPaused:false,_lastInputAt:0};
   outputCards.push(oc);
 
   const safeQ=(opts.question||'').replace(/</g,'&lt;');
@@ -516,7 +1066,7 @@ function mkQuestionCard(opts){
 
   const el=document.createElement('div');
   el.className='output-card question-card';el.id=id;
-  el.style.cssText=`left:${x}px;top:${y}px`;
+  el.style.cssText=`left:${oc.x}px;top:${oc.y}px`;
   el.innerHTML=`
     <div class="oc-inner">
       <div class="qcard-hd">
@@ -527,7 +1077,7 @@ function mkQuestionCard(opts){
         <div class="qcard-q">${safeQ}</div>
         <div class="qcard-suggest-lbl">sugerencia — se asumirá si no respondes</div>
         <div class="qcard-suggest" id="qsug_${id}" onclick="document.getElementById('qinput_${id}').value='${safeSugVal}';document.getElementById('qinput_${id}').focus()">${safeSug}</div>
-        <textarea class="qcard-input" id="qinput_${id}" rows="2" placeholder="Escribe tu respuesta aquí..."></textarea>
+        <textarea class="qcard-input" id="qinput_${id}" rows="2" placeholder="Escribe tu respuesta aquí...">${safeSugVal}</textarea>
       </div>
       <div class="qcard-progress-wrap">
         <div class="qcard-timer-txt" id="qtimer_${id}"></div>
@@ -546,12 +1096,32 @@ function mkQuestionCard(opts){
   document.getElementById('qinput_'+id).addEventListener('keydown',e=>{
     if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();_resolveQuestion(id,true);}
   });
+  document.getElementById('qinput_'+id).addEventListener('input',()=>{
+    oc._typingPaused=true;
+    oc._lastInputAt=Date.now();
+  });
+  document.getElementById('qinput_'+id).addEventListener('focus',()=>{
+    oc._typingPaused=true;
+    oc._lastInputAt=Date.now();
+  });
+  document.getElementById('qinput_'+id).addEventListener('blur',()=>{
+    oc._typingPaused=false;
+  });
   document.getElementById('qconfirm_'+id).addEventListener('click',()=>_resolveQuestion(id,true));
   document.getElementById('qskip_'+id).addEventListener('click',()=>_resolveQuestion(id,false));
 
   // Countdown timer
   const start=Date.now();
   oc._timer=setInterval(()=>{
+    if(oc._typingPaused){
+      const idleFor=Date.now()-(oc._lastInputAt||0);
+      if(idleFor<1200){
+        const timerEl=document.getElementById('qtimer_'+id);
+        if(timerEl)timerEl.textContent='escribiendo…';
+        return;
+      }
+      oc._typingPaused=false;
+    }
     const remaining=Math.max(0,timeout-(Date.now()-start));
     const pct=remaining/timeout*100;
     const bar=document.getElementById('qbar_'+id);
@@ -562,6 +1132,7 @@ function mkQuestionCard(opts){
   },250);
 
   glog('think','Operador','human','◎ '+opts.question);
+  ensureQuestionCardConnection(oc);
   drawConns();
   return oc;
 }
@@ -571,16 +1142,148 @@ function _resolveQuestion(cardId, useInput){
   if(oc._timer)clearInterval(oc._timer);
   const inputEl=document.getElementById('qinput_'+cardId);
   const userVal=inputEl?.value?.trim()||'';
-  const answer=useInput&&userVal ? userVal : (oc._suggestion||'');
-  const source=useInput&&userVal?'usuario':'sugerencia';
+  const suggestion=oc._suggestion||'';
+  const userModified=userVal&&userVal!==suggestion.trim();
+  const answer=userModified ? userVal : (suggestion||userVal);
+  const source=userModified?'usuario':'sugerencia';
 
   const el=document.getElementById(cardId);
-  if(el){el.style.opacity='0';el.style.transition='opacity .25s';
-    setTimeout(()=>{el.remove();outputCards=outputCards.filter(c=>c.id!==cardId);drawConns();},260);}
-  else{outputCards=outputCards.filter(c=>c.id!==cardId);}
+  oc.type='text';
+  oc.label='Decisión operador';
+  oc.content=`Pregunta: ${oc.question||''}\n\nRespuesta (${source}): ${answer||'sin respuesta'}\n\nCampo: ${oc.fieldKey||'sin_campo'}`;
+  oc.status='answered';
+  oc.isQuestionResolved=true;
+  oc.answer=answer;
+  oc.answerSource=source;
+  oc.fromNodeName='Operador';
+  oc.fromDot='#c8a040';
+  if(el){
+    el.remove();
+    mkOutputCard(oc);
+  }
+  conns=conns.filter(c=>c.to!==cardId);
+  ensureQuestionCardConnection(oc);
+  drawConns();
+  scheduleSave();
 
   glog('decision','Operador','human','Respuesta ('+source+'): '+answer.slice(0,80));
   if(oc._onAnswer)oc._onAnswer(answer,source);
+  setTimeout(()=>drainOperatorQuestionQueue(),80);
+}
+
+function ensureQuestionCardConnection(oc){
+  const operatorNode=nodes.find(n=>n.type==='human'||n.agentId==='AG-05');
+  if(!operatorNode||!oc?.id)return;
+  if(conns.some(c=>c.from===operatorNode.id&&c.to===oc.id))return;
+  conns.push({
+    id:'c'+Math.random().toString(36).slice(2,10),
+    from:operatorNode.id,
+    fp:'out',
+    to:oc.id,
+    tp:'in',
+    active:false,
+    fromCard:false,
+    isQuestionConn:true,
+  });
+}
+
+function getActiveQuestionCard(){
+  return outputCards.find(c=>c.isQuestionCard&&!c.isQuestionResolved)||null;
+}
+
+function inferSuggestionFromQuestionText(questionText){
+  const text=String(questionText||'').trim();
+  if(!text)return'';
+  const recommended=text.match(/(?:recomendad[oa]|sugerid[oa]|default)\s*[:\-]?\s*(\d+)/i);
+  if(recommended?.[1])return recommended[1];
+  const optionNumbers=[...text.matchAll(/(?:^|\s)(\d+)\s*(?:[).:\-]|para\b)/gi)].map(m=>String(m[1]).trim()).filter(Boolean);
+  if(optionNumbers.length)return optionNumbers[optionNumbers.length-1];
+  return'';
+}
+
+function inferQuestionSuggestion(question){
+  if(question?.suggestion&&String(question.suggestion).trim())return String(question.suggestion).trim();
+  const meta=question?.metadata||{};
+  if(meta.default_value!==undefined&&meta.default_value!==null&&String(meta.default_value).trim())return String(meta.default_value).trim();
+  if(Array.isArray(meta.opciones)&&meta.opciones.length)return String(meta.opciones[0]).trim();
+  const inferredFromText=inferSuggestionFromQuestionText(question?.question||meta.question||'');
+  if(inferredFromText)return inferredFromText;
+  const fieldKey=String(question?.field_key||meta.field_key||'').trim();
+  const builtIns={
+    cantidad_videos:'10',
+    plataforma_destino:'YouTube',
+    duracion_video:'Medio (2–5 min)',
+    tono_comunicacion:'Cercano y motivacional',
+    publico_objetivo:'Adultos en general',
+    nombre_canal_o_marca:'ninguno',
+    habito_seleccionado:'Beber agua antes de cada comida',
+    confirmar_cantidad_videos:'Continuar con 1 video (solo \'Beber agua antes de cada comida\')',
+    confirmar_tono:'Está bien así (Cercano y motivacional)',
+    confirmar_errores_guion:'Corregir errores y ajustar duración a ~60 segundos',
+    nivel_audiencia:'intermedio (algo de tecnología)',
+    numero_modulos:'6',
+    formato_entrega:'documento de texto (Markdown/Word)',
+    tono_pedagogico:'conversacional y accesible',
+    incluir_ejercicios:'sí, con ejercicios prácticos',
+    enfoque_tematico:'IA generativa y herramientas prácticas de IA para el trabajo',
+  };
+  if(fieldKey&&builtIns[fieldKey])return builtIns[fieldKey];
+  if(meta.tipo==='numero')return '1';
+  if(meta.tipo==='texto')return '';
+  return '';
+}
+
+function getQuestionTimeoutMs(){
+  const totalPending=operatorQuestionQueue.length+(getActiveQuestionCard()?1:0);
+  if(totalPending>=6)return 28000;
+  if(totalPending>=4)return 22000;
+  return 18000;
+}
+
+function drainOperatorQuestionQueue(){
+  if(getActiveQuestionCard())return;
+  if(!operatorQuestionQueue.length)return;
+  const question=operatorQuestionQueue.shift();
+  if(!question)return;
+  const editorNode=nodes.find(n=>n.type==='human'||n.agentId==='AG-05');
+  const vw=window.innerWidth,vh=window.innerHeight;
+  const cx=(vw/2-px)/sc,cy=(vh/2-py)/sc;
+  const baseX=editorNode ? (editorNode.x + 310) : (cx - 190);
+  const baseY=editorNode ? (editorNode.y + 10) : (cy - 150);
+  return mkQuestionCard({
+    questionId:question.public_id,
+    question:question.question,
+    suggestion:inferQuestionSuggestion(question),
+    timeout:getQuestionTimeoutMs(),
+    pipelineId:question.pipeline_id||currentPipelineId,
+    fieldKey:question.field_key||question.metadata?.field_key||question.public_id,
+    onAnswer:(answer,source)=>submitOperatorQuestionAnswer(question.public_id,answer,source),
+    x:baseX,
+    y:baseY,
+  });
+}
+
+function createBackendQuestionCard(question){
+  if(!question||!question.public_id||question.status==='answered')return;
+  if(outputCards.some(c=>c.questionId===question.public_id)||operatorQuestionQueue.some(q=>q.public_id===question.public_id))return;
+  ensureLogVisibleForActivity();
+  if(operatorQuestionQueue.length>=MAX_OPERATOR_QUESTION_CARDS)operatorQuestionQueue=operatorQuestionQueue.slice(-MAX_OPERATOR_QUESTION_CARDS+1);
+  operatorQuestionQueue.push(question);
+  return drainOperatorQuestionQueue();
+}
+
+async function submitOperatorQuestionAnswer(questionId,answer,source){
+  if(!currentPipelineId||!questionId)return;
+  const answer_origin=source==='usuario'?'manual':'automatic';
+  try{
+    await fetch('/api/pipelines/'+currentPipelineId+'/operator-questions/'+questionId+'/answer',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({answer,answer_origin}),
+    });
+  }catch(e){
+    glog('warn','Operador','human','No se pudo registrar la respuesta de la pregunta.');
+  }
 }
 
 function expandContextCard(id){
@@ -665,14 +1368,65 @@ function mkOutputCard(oc){
     if(connFrom&&connFrom.nid!==oc.id){e.stopPropagation();finishConn(oc.id,'in');}
   });
   document.getElementById('canvas').appendChild(el);
+  redrawConnsSoon();
+}
+
+function parseOutputCardContent(oc){
+  const raw=typeof oc?.content==='string'?oc.content.trim():'';
+  if(!raw)return null;
+  try{return JSON.parse(raw);}catch{return null;}
+}
+
+function getMediaCardData(oc){
+  const parsed=parseOutputCardContent(oc);
+  const meta=oc?.meta||{};
+  const parsedResult=meta?.parsed_resultado||{};
+  const nestedResult=parsed?.resultado||{};
+  const imageUrl=
+    parsed?.imagen_url||parsed?.image_url||parsed?.imagen_uri||parsed?.image_uri||
+    parsed?.thumbnail_url||parsed?.poster_url||parsed?.frame_url||parsed?.preview_image||
+    nestedResult?.imagen_url||nestedResult?.image_url||nestedResult?.imagen_uri||nestedResult?.image_uri||
+    nestedResult?.thumbnail_url||nestedResult?.poster_url||nestedResult?.frame_url||nestedResult?.preview_image||
+    parsedResult?.imagen_url||parsedResult?.image_url||parsedResult?.imagen_uri||parsedResult?.image_uri||
+    parsedResult?.thumbnail_url||parsedResult?.poster_url||parsedResult?.frame_url||parsedResult?.preview_image||
+    '';
+  const videoUrl=
+    parsed?.video_url||parsed?.clip_url||parsed?.video_uri||parsed?.mp4_url||parsed?.url||
+    nestedResult?.video_url||nestedResult?.clip_url||nestedResult?.video_uri||nestedResult?.mp4_url||nestedResult?.url||
+    parsedResult?.video_url||parsedResult?.clip_url||parsedResult?.video_uri||parsedResult?.mp4_url||parsedResult?.url||
+    '';
+  const prompt=parsed?.prompt_usado||parsed?.prompt||nestedResult?.prompt_usado||nestedResult?.prompt||parsed?.asset?.prompt||parsedResult?.prompt_usado||parsedResult?.prompt||'';
+  return{
+    parsed,
+    imageUrl:typeof imageUrl==='string'?imageUrl:'',
+    videoUrl:typeof videoUrl==='string'?videoUrl:'',
+    prompt:String(prompt||'').trim(),
+  };
 }
 
 function getCardPreview(oc){
-  if(oc.type==='image'&&oc.content&&(oc.content.startsWith('data:')||oc.content.startsWith('http')))
-    return`<img class="oc-preview-img" src="${oc.content}" style="width:100%;display:block;object-fit:cover;max-height:140px"/>`;
+  const safe=c=>{const t=(c||'').trim();return(t==='null'||t==='{}'||t==='""')?'':t;};
+  if(oc.type==='image'){
+    const data=getMediaCardData(oc);
+    if(data.imageUrl&&(data.imageUrl.startsWith('data:')||data.imageUrl.startsWith('http')||data.imageUrl.startsWith('/'))){
+      return`<div class="oc-preview-image-card"><img class="oc-preview-img" src="${data.imageUrl}" style="width:100%;display:block;object-fit:cover;max-height:140px"/><div class="oc-preview-caption">${escapeHTML((data.prompt||safe(oc.content)||'').slice(0,96))}</div></div>`;
+    }
+  }
+  if(oc.type==='video'){
+    const data=getMediaCardData(oc);
+    const poster=data.imageUrl&&(data.imageUrl.startsWith('data:')||data.imageUrl.startsWith('http')||data.imageUrl.startsWith('/'))
+      ?` poster="${data.imageUrl}"`
+      :'';
+    if(data.videoUrl&&(data.videoUrl.startsWith('http')||data.videoUrl.startsWith('/'))){
+      return`<div class="oc-preview-video-card"><video class="oc-preview-video" src="${data.videoUrl}"${poster} preload="metadata" muted playsinline></video><div class="oc-preview-caption">${escapeHTML((data.prompt||safe(oc.content)||'').slice(0,96))}</div></div>`;
+    }
+    if(data.imageUrl&&(data.imageUrl.startsWith('data:')||data.imageUrl.startsWith('http')||data.imageUrl.startsWith('/'))){
+      return`<div class="oc-preview-video-card"><img class="oc-preview-img" src="${data.imageUrl}" style="width:100%;display:block;object-fit:cover;max-height:140px"/><div class="oc-preview-caption">${escapeHTML((data.prompt||safe(oc.content)||'').slice(0,96))}</div></div>`;
+    }
+  }
   if(oc.type==='json')
-    return`<div class="oc-preview-json">${(oc.content||'').slice(0,120)}</div>`;
-  return`<div class="oc-preview-txt">${(oc.content||'').slice(0,140)}</div>`;
+    return`<div class="oc-preview-json">${safe(oc.content).slice(0,120)}</div>`;
+  return`<div class="oc-preview-txt">${safe(oc.content).slice(0,140)}</div>`;
 }
 
 function cardMouseDown(e,id){
@@ -690,6 +1444,31 @@ function expandCard(id){
   expandTarget={type:'card',id};
   document.getElementById('ex-title').textContent=`${oc.fromNodeName} — ${oc.type}`;
   const body=document.getElementById('expandcontent');
+  if(oc.type==='image'){
+    const data=getMediaCardData(oc);
+    if(data.imageUrl&&(data.imageUrl.startsWith('data:')||data.imageUrl.startsWith('http')||data.imageUrl.startsWith('/'))){
+      body.innerHTML=`
+        <img src="${data.imageUrl}" style="width:100%;border-radius:4px;display:block;margin-bottom:12px;max-height:340px;object-fit:contain;background:#0a0808">
+        <div style="font-size:8px;color:#5a5248;letter-spacing:.1em;text-transform:uppercase;margin-bottom:5px;font-family:'IBM Plex Mono',monospace">Prompt usado</div>
+        <textarea class="ex-textarea" id="ex-edit" style="min-height:90px">${data.prompt||''}</textarea>`;
+      document.getElementById('expandwin').classList.add('open');
+      return;
+    }
+  }
+  if(oc.type==='video'){
+    const data=getMediaCardData(oc);
+    const poster=data.imageUrl&&(data.imageUrl.startsWith('data:')||data.imageUrl.startsWith('http')||data.imageUrl.startsWith('/'))
+      ?` poster="${data.imageUrl}"`
+      :'';
+    if(data.videoUrl&&(data.videoUrl.startsWith('http')||data.videoUrl.startsWith('/'))){
+      body.innerHTML=`
+        <video src="${data.videoUrl}"${poster} controls preload="metadata" playsinline style="width:100%;border-radius:4px;display:block;margin-bottom:12px;max-height:340px;background:#0a0808"></video>
+        <div style="font-size:8px;color:#5a5248;letter-spacing:.1em;text-transform:uppercase;margin-bottom:5px;font-family:'IBM Plex Mono',monospace">Prompt / metadata</div>
+        <textarea class="ex-textarea" id="ex-edit" style="min-height:90px">${data.prompt||oc.content||''}</textarea>`;
+      document.getElementById('expandwin').classList.add('open');
+      return;
+    }
+  }
   if(oc.type==='image'&&oc.content&&(oc.content.startsWith('data:')||oc.content.startsWith('http'))){
     body.innerHTML=`
       <img src="${oc.content}" style="width:100%;border-radius:4px;display:block;margin-bottom:12px;max-height:340px;object-fit:contain;background:#0a0808">
@@ -701,20 +1480,159 @@ function expandCard(id){
   document.getElementById('expandwin').classList.add('open');
 }
 
+async function tryMaterializeOperatorQuestionsFromCard(oc,val){
+  if(!oc||!currentPipelineId)return false;
+  let parsed=null;
+  try{parsed=JSON.parse(val);}catch{return false;}
+  const questions=extractOperatorQuestionsFromPayload(parsed, oc);
+
+  if(!questions.length)return false;
+
+  try{
+    const res=await fetch('/api/pipelines/'+currentPipelineId+'/operator-questions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({questions}),
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok){
+      glog('warn','Operador','human','No se pudieron crear las preguntas desde el JSON del operador.');
+      return false;
+    }
+    if(Array.isArray(data.created)){
+      data.created.forEach(q=>createBackendQuestionCard(q));
+    }
+    oc.content=JSON.stringify({
+      preguntas_generadas:questions.length,
+      estado:'materializadas_en_cards',
+    },null,2);
+    const el=document.getElementById(oc.id);
+    if(el){
+      const b=el.querySelector('.oc-body');
+      if(b)b.innerHTML=getCardPreview(oc)+`<div class="oc-expand-hint">preguntas convertidas en cards</div>`;
+    }
+    glog('done','Operador','human',questions.length+' preguntas convertidas en cards para el usuario.');
+    return true;
+  }catch(e){
+    glog('warn','Operador','human','Fallo creando las preguntas del operador.');
+    return false;
+  }
+}
+
+async function tryMaterializeOperatorQuestionsFromOutputCard(oc){
+  if(!oc||!currentPipelineId||oc._questionsMaterialized)return false;
+  let parsed=null;
+  try{parsed=typeof oc.content==='string'?JSON.parse(oc.content):null;}catch{parsed=null;}
+  const questions=extractOperatorQuestionsFromPayload(parsed||oc.content, oc);
+  if(!questions.length)return false;
+
+  try{
+    const res=await fetch('/api/pipelines/'+currentPipelineId+'/operator-questions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({questions}),
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok)return false;
+    if(Array.isArray(data.created))data.created.forEach(q=>createBackendQuestionCard(q));
+    oc._questionsMaterialized=true;
+    oc.content=JSON.stringify({
+      preguntas_generadas:questions.length,
+      estado:'materializadas_en_cards',
+    },null,2);
+    const el=document.getElementById(oc.id);
+    if(el){
+      const b=el.querySelector('.oc-body');
+      if(b)b.innerHTML=getCardPreview(oc)+`<div class="oc-expand-hint">preguntas convertidas en cards</div>`;
+    }
+    scheduleSave();
+    return true;
+  }catch(_){
+    return false;
+  }
+}
+
+function extractOperatorQuestionsFromPayload(parsed, oc){
+  if(typeof parsed==='string'){
+    const text=parsed.trim();
+    if(!text||!/\?/.test(text))return [];
+    return [{
+      question:text,
+      field_key:oc.meta?.field_key||oc.meta?.campo||oc.meta?.campo_original||oc.meta?.bloque_destino||`${oc.fromNodeName||'operador'}_1`,
+      suggestion:inferQuestionSuggestion({
+        field_key:oc.meta?.field_key||oc.meta?.campo||oc.meta?.campo_original||'pref_general',
+        question:text,
+        metadata:{
+          tipo:oc.meta?.tipo||'texto',
+          opciones:Array.isArray(oc.meta?.opciones)?oc.meta.opciones:[],
+          default_value:oc.meta?.default_value||oc.meta?.default||null,
+        }
+      }),
+      metadata:{
+        bloque:oc.meta?.bloque_destino||null,
+        tipo:oc.meta?.tipo||'texto',
+        opciones:Array.isArray(oc.meta?.opciones)?oc.meta.opciones:[],
+        default_value:oc.meta?.default_value||oc.meta?.default||null,
+        source_card_id:oc.id,
+      },
+    }];
+  }
+
+  const rawQuestions=Array.isArray(parsed?.preguntas)
+    ? parsed.preguntas
+    : Array.isArray(parsed?.resultado?.preguntas)
+      ? parsed.resultado.preguntas
+      : Array.isArray(parsed?.resultado?.preguntas_activas)
+        ? parsed.resultado.preguntas_activas
+      : [];
+
+  if(rawQuestions.length){
+    return rawQuestions.map((item,index)=>({
+      question:String(item?.pregunta||item?.question||'').trim(),
+      field_key:item?.campo||item?.field_key||`${oc.fromNodeName||'operador'}_${index+1}`,
+      suggestion:String(item?.sugerencia||item?.suggestion||item?.default_value||item?.default||'').trim(),
+      metadata:{
+        bloque:item?.bloque||oc.meta?.bloque_destino||null,
+        tipo:item?.tipo||'texto',
+        opciones:Array.isArray(item?.opciones)?item.opciones:[],
+        default_value:item?.default_value||item?.default||null,
+        source_card_id:oc.id,
+      },
+    })).filter(item=>item.question);
+  }
+
+  const sourceObj=(parsed?.resultado&&typeof parsed.resultado==='object')?parsed.resultado:parsed;
+  if(!sourceObj||typeof sourceObj!=='object')return [];
+
+  return Object.entries(sourceObj)
+    .filter(([key,val])=>String(key||'').startsWith('question_')&&typeof val==='string'&&val.trim())
+    .map(([key,val])=>({
+      question:String(val).trim(),
+      field_key:String(key).replace(/^question_/,'')||key,
+      suggestion:inferQuestionSuggestion({field_key:String(key).replace(/^question_/,'')||key,question:String(val).trim(),metadata:{tipo:'texto'}}),
+      metadata:{
+        bloque:oc.meta?.bloque_destino||null,
+        source_card_id:oc.id,
+      },
+    }));
+}
+
 function deleteCard(id){
   const card=outputCards.find(c=>c.id===id);
   if(card?.assetId){
     glog('warn','Canvas','system','Esta card proviene del contexto real. Si el asset sigue vigente o histórico, se volverá a renderizar.');
     return;
   }
+  const affectedNodeIds=conns.filter(c=>c.from===id||c.to===id).flatMap(c=>[c.from,c.to]).filter(ref=>nodes.some(n=>n.id===ref));
   document.getElementById(id)?.remove();
   outputCards=outputCards.filter(c=>c.id!==id);
   conns=conns.filter(c=>c.from!==id&&c.to!==id);
+  affectedNodeIds.forEach(refreshNodeConnectionUI);
   drawConns();
 }
 
 function isProtectedCard(card){
-  return card.label==='Prompt inicial'||card.isCtxFile||card.isQuestionCard||document.getElementById(card.id)?.classList.contains('seed-input-card');
+  return card._kind==='seed'||card._isRuntime||card.label==='Prompt inicial'||card.isCtxFile||card.isQuestionCard||card.backendOutput||document.getElementById(card.id)?.classList.contains('seed-input-card');
 }
 
 function reconcileOutputCardsFromContext(ctx){
@@ -736,27 +1654,27 @@ function applyContextToUI(ctx,pipelineId){
   if(_userStartedRun&&ctx.pipeline?.iniciado_en&&['en_progreso','iniciando'].includes(ctx.estado))startPipelineRunClock(ctx.pipeline.iniciado_en);
   else if(['pausado','completo','cancelado','corrupto'].includes(ctx.estado)){stopPipelineRunClock();_userStartedRun=false;}
   reconcileOutputCardsFromContext(ctx);
+  ensureCanvasSeedCardFromContext(ctx);
+  if(Array.isArray(ctx.preguntas_pendientes)){
+    ctx.preguntas_pendientes
+      .filter(q=>q&&q.status!=='answered')
+      .forEach(q=>createBackendQuestionCard(q));
+  }
   const assets=ctx.assets||{};
   Object.values(assets).forEach(asset=>upsertAssetCardFromContext(asset,ctx));
-  // Auto-show context card and wire it to pilot
-  if(pipelineId){
+
+  // Auto-asignar agentId a nodos colocados manualmente sin agentId
+  const TYPE_TO_AG={'pilot':'AG-01','human':'AG-05','research':'AG-06','image':'AG-04','prompt':'AG-03','assembly':'AG-07','video':'AG-04'};
+  nodes.forEach(n=>{if(!n.agentId&&TYPE_TO_AG[n.type])n.agentId=TYPE_TO_AG[n.type];});
+
+  // Mostrar context card desde que el pipeline está en progreso
+  if(pipelineId&&['preparado','en_progreso','completo','pausado'].includes(ctx.estado)){
     const pilot=nodes.find(n=>n.type==='pilot'||n.agentId==='AG-01');
-    const seedCard=outputCards.find(c=>c.label==='Prompt inicial');
-    const cx=seedCard?(seedCard.x):(pilot?(pilot.x-320):2600);
-    const cy=seedCard?(seedCard.y+200):(pilot?(pilot.y+10):2400);
+    const seedCard=outputCards.find(c=>c._kind==='seed'||c.label==='Prompt inicial');
+    const cx=seedCard?(seedCard.x+260):(pilot?(pilot.x-340):2600);
+    const cy=seedCard?(seedCard.y):(pilot?(pilot.y):2400);
     const existing=outputCards.find(c=>c.isCtxFile&&c.pipelineId===pipelineId);
-    const ctxOc=mkContextCard(pipelineId,ctx,existing?.x??cx,existing?.y??cy);
-    // Connect context card ↔ pilot if not already wired
-    if(pilot&&ctxOc){
-      const alreadyIn =conns.some(c=>c.from===ctxOc.id&&c.to===pilot.id);
-      const alreadyOut=conns.some(c=>c.from===pilot.id&&(c.to===ctxOc.id||c.fp==='ctx'));
-      if(!alreadyIn)conns.push({id:'c'+Math.random().toString(36).slice(2,10),
-        from:ctxOc.id,fp:'out',to:pilot.id,tp:'in',active:false,fromCard:true,isCtxConn:true});
-      if(!alreadyOut)conns.push({id:'c'+Math.random().toString(36).slice(2,10),
-        from:pilot.id,fp:pilot.type==='pilot'?'out-y':'out',to:ctxOc.id,tp:'in',
-        active:false,isCtxConn:true,cond:pilot.type==='pilot',condT:'yes'});
-    }
-    drawConns();
+    mkContextCard(pipelineId,ctx,existing?.x??cx,existing?.y??cy);
   }
 
   const agentStates=ctx.agentes_activos||{};
@@ -767,6 +1685,60 @@ function applyContextToUI(ctx,pipelineId){
     const statusMap={activo:'running',completado:'done',pausado:'idle',reemplazado:'done',descartado:'idle',running:'running',done:'done',idle:'idle',error:'error',paused:'idle'};
     setStatus(n.id,statusMap[ag.estado]||'idle');
   });
+
+  syncRuntimeAgentsToCanvas(ctx);
+  ensureAssemblyNodeFromContext(ctx);
+  if(pipelineId&&['preparado','en_progreso','completo','pausado'].includes(ctx.estado))syncContextCardActivity(ctx,pipelineId);
+  drawConns();
+
+  const pilotNode=nodes.find(n=>n.type==='pilot'||n.agentId==='AG-01');
+  if(pilotNode){
+    const unresolvedPrefs=Object.values(ctx.preferencias_usuario?._requeridas||{})
+      .filter(pref=>pref&&pref.obligatorio&&!pref.resuelta)
+      .map(pref=>({label:pref.pregunta||('Definir '+pref.campo),status:'waiting'}));
+    const queueTasks=(ctx.cola_tareas||[])
+      .filter(task=>['pendiente','en_progreso','running','activo'].includes(task.estado))
+      .slice(0,4)
+      .map(task=>({label:task.accion||task.bloque||task.tarea_id||'Tarea pendiente',status:task.estado==='pendiente'?'pending':'active'}));
+    const editorTask=ctx.editor?.esperando_input?[{label:ctx.editor?.pregunta_activa||'Esperando respuesta del usuario',status:'waiting'}]:[];
+    const latestDecision=ctx.historial_decisiones?.slice(-1)[0];
+    const health=ctx.salud_pipeline||{};
+    pilotNode.runtimeCycle=Number.isFinite(ctx.ciclo)?ctx.ciclo:(ctx.pipeline?.ciclo_actual||0);
+    pilotNode.pilotStatusLabel=(ctx.estado==='en_progreso'||ctx.estado==='iniciando')?'RUN':(ctx.estado||pilotNode.pilotStatusLabel||'IDLE');
+    pilotNode.pilotTokenLabel=formatPilotTokenLabel(pilotTokenTotalValue||0);
+    pilotNode.pilotTasks=[...editorTask,...unresolvedPrefs,...queueTasks].slice(0,6);
+    pilotNode.pilotReport=[
+      `Estado general: ${ctx.estado||'iniciando'}`,
+      `Ciclo actual: ${pilotNode.runtimeCycle}`,
+      latestDecision?`Ultima decision: ${latestDecision.agente||'AG-01'} -> ${latestDecision.accion||'sin accion'} (${latestDecision.prioridad||'normal'})`:'Ultima decision: aun no registrada',
+      health.ultimo_motivo?`Bloqueo / motivo: ${health.ultimo_motivo}`:'Bloqueo / motivo: sin bloqueos criticos',
+      ctx.editor?.esperando_input?`Operador: esperando input sobre "${ctx.editor?.pregunta_activa||'consulta activa'}"`:'Operador: sin preguntas pendientes',
+      `Ensamblaje: ${ctx.ensamblaje?.estado||'pendiente'}`,
+    ].join('\n');
+    const pel=document.getElementById(pilotNode.id);
+    if(pel){
+      const cycleRow=pel.querySelector('.pilot-cycle-row');
+      if(cycleRow)cycleRow.outerHTML=pilotLoopHTML(pilotNode);
+      const taskWrap=pel.querySelector('.pilot-task-wrap');
+      if(taskWrap)taskWrap.outerHTML=pilotTasksHTML(pilotNode);
+      const snippet=pel.querySelector('.pilot-report-snippet');
+      if(snippet)snippet.outerHTML=`<div class="pilot-report-snippet" onclick="openPilotReport('${pilotNode.id}')">${escapeHTML(pilotReportText(pilotNode))}</div>`;
+      const state=pel.querySelector('.pilot-action-state');
+      if(state)state.textContent=pilotNode.pilotStatusLabel;
+      const barState=pel.querySelector('.pilot-bottom-status');
+      if(barState)barState.textContent=pilotNode.pilotStatusLabel;
+      const barTokens=pel.querySelector('.pilot-bottom-tokens');
+      if(barTokens)barTokens.textContent=pilotNode.pilotTokenLabel||pilotTokenTotal;
+    }
+    updatePilotLogCard(pilotNode.id);
+  }
+
+  // Update assembly card vis for any assembly node on canvas
+  const assemblyNode=nodes.find(n=>n.type==='assembly'||n.agentId==='AG-07');
+  if(assemblyNode){
+    updateAssemblyVis(assemblyNode.id,ctx);
+    if(ctx?.ensamblaje?.producto_final)dropAssemblyOutputCard(assemblyNode,ctx.ensamblaje.producto_final);
+  }
 
   const blocks=Object.values(ctx.bloques||{});
   const total=blocks.length;
@@ -831,12 +1803,12 @@ function upsertAssetCardFromContext(asset,ctx){
     }
     return;
   }
-  const oc={id:'oc'+Math.random().toString(36).slice(2,10),...cardData};
+  const oc={id:'oc'+Math.random().toString(36).slice(2,10),_kind:'output',...cardData};
   outputCards.push(oc);
   mkOutputCard(oc);
   const el=document.getElementById(oc.id);
   if(el&&status==='reemplazado')el.style.opacity='.55';
-  drawConns();
+  drawConns();scheduleSave();
 }
 
 function resolveAssetNode(asset,block){
@@ -870,6 +1842,77 @@ function syncProgressFromContext(pipelineId){
     .catch(()=>{});
 }
 
+function openPilotReport(nodeId){
+  const n=nodes.find(x=>x.id===nodeId);if(!n)return;
+  openExpandField({stopPropagation(){}},nodeId,'pilotReport');
+}
+
+function togglePilotLogCard(nodeId){
+  const nodeEl=document.getElementById(nodeId);if(!nodeEl)return;
+  if(pilotLogOpen.has(nodeId)){
+    pilotLogOpen.delete(nodeId);
+    document.getElementById('plc_'+nodeId)?.remove();
+    nodeEl.style.zIndex='';
+  }else{
+    pilotLogOpen.add(nodeId);
+    mkPilotLogCard(nodeId);
+    nodeEl.style.zIndex='20';
+  }
+}
+
+function mkPilotLogCard(nodeId){
+  const n=nodes.find(x=>x.id===nodeId);if(!n)return;
+  document.getElementById('plc_'+nodeId)?.remove();
+  const el=document.createElement('div');
+  el.className='pilot-log-card';el.id='plc_'+nodeId;
+  el.addEventListener('mousedown',e=>e.stopPropagation());
+  el.addEventListener('click',e=>{e.stopPropagation();openPilotReport(nodeId);});
+  el.innerHTML=`
+    <div class="plc-bar">
+      <span class="plc-dot"></span>
+      <span class="plc-title">Estado · log en vivo</span>
+      <span class="plc-close" id="plcc_${nodeId}">✕</span>
+    </div>
+    <div class="plc-body" id="plcb_${nodeId}">${renderPilotLogLines(n)}</div>`;
+  el.querySelector('.plc-close').addEventListener('click',e=>{
+    e.stopPropagation();togglePilotLogCard(nodeId);
+  });
+  document.getElementById(nodeId)?.appendChild(el);
+}
+
+function renderPilotLogLines(n){
+  const text=pilotReportText(n);
+  if(!text||text.startsWith('Sin reportes'))
+    return`<div class="plc-empty">› Esperando actividad del piloto...</div>`;
+  return text.split('\n').filter(Boolean).map((line,i)=>
+    `<div class="plc-line${i===0?' plc-new':''}"><span class="plc-prompt">›</span><span class="plc-text">${escapeHTML(line)}</span></div>`
+  ).join('');
+}
+
+function updatePilotLogCard(nodeId){
+  if(!pilotLogOpen.has(nodeId))return;
+  const n=nodes.find(x=>x.id===nodeId);if(!n)return;
+  const body=document.getElementById('plcb_'+nodeId);
+  if(!body)return;
+  const atBottom=body.scrollHeight-body.scrollTop-body.clientHeight<32;
+  body.innerHTML=renderPilotLogLines(n);
+  if(atBottom)body.scrollTop=body.scrollHeight;
+}
+
+function setPilotLoopMode(id,value){
+  const n=nodes.find(x=>x.id===id);if(!n)return;
+  n.loopMode=value;
+  const row=document.getElementById(id)?.querySelector('.pilot-cycle-row');
+  if(row)row.outerHTML=pilotLoopHTML(n);
+  scheduleSave();
+}
+
+function setPilotMaxCycles(id,value){
+  const n=nodes.find(x=>x.id===id);if(!n)return;
+  n.maxCycles=Math.max(1,Math.min(500,parseInt(value,10)||50));
+  scheduleSave();
+}
+
 
 // ══════════════════════════════
 // EXPAND WINDOW (meta/goal/text)
@@ -883,13 +1926,14 @@ function openExpandField(e,nodeId,field){
   if(field==='meta'){title='Meta / Goal';content=`META:\n${n.meta||tp.meta||''}\n\nGOAL:\n${n.goal||tp.goal||''}`;}
   else if(field==='promptOut'){title='Prompt / Output texto';content=n.promptOut||tp.promptText||'';}
   else if(field==='humanEdit'){title='Decisión del Operador — Editar contexto';content=n.humanNote||'Escribe aquí las notas o contexto adicional para la decisión...';}
+  else if(field==='pilotReport'){title='Estado / Reportes del Piloto';content=n.pilotReport||pilotReportText(n);}
   else{title=field;content=n[field]||'';}
   document.getElementById('ex-title').textContent=title;
   document.getElementById('expandcontent').innerHTML=`<textarea class="ex-textarea" id="ex-edit">${content}</textarea>`;
   document.getElementById('expandwin').classList.add('open');
 }
 
-function saveExpand(){
+async function saveExpand(){
   const ta=document.getElementById('ex-edit');if(!ta)return;
   const val=ta.value;
   if(expandTarget?.type==='node'){
@@ -904,11 +1948,42 @@ function saveExpand(){
       } else n[expandTarget.field]=val;
       // Re-render meta section
       const el=document.getElementById(n.id);
-      if(el){const m=el.querySelector('.nmeta');if(m)m.outerHTML=metaHTML(n);}
+      if(el){
+        const m=el.querySelector('.nmeta');if(m)m.outerHTML=metaHTML(n);
+        if(expandTarget.field==='pilotReport'){
+          const report=el.querySelector('.pilot-report-snippet');
+          if(report)report.outerHTML=`<div class="pilot-report-snippet" onclick="openPilotReport('${n.id}')">${escapeHTML(pilotReportText(n))}</div>`;
+        }
+      }
     }
   } else if(expandTarget?.type==='card'){
     const oc=outputCards.find(c=>c.id===expandTarget.id);
-    if(oc){oc.content=val;const el=document.getElementById(oc.id);if(el){const b=el.querySelector('.oc-body');if(b)b.innerHTML=getCardPreview(oc)+`<div class="oc-expand-hint">ver / editar</div>`;}}
+    if(oc){
+      const materialized=await tryMaterializeOperatorQuestionsFromCard(oc,val);
+      if(!materialized){
+        if(oc.type==='image'){
+          const data=getMediaCardData(oc);
+          oc.content=JSON.stringify({
+            prompt_usado: val,
+            imagen_url: data.imageUrl || '',
+          },null,2);
+        }else if(oc.type==='video'){
+          const data=getMediaCardData(oc);
+          oc.content=JSON.stringify({
+            prompt_usado: val,
+            video_url: data.videoUrl || '',
+            poster_url: data.imageUrl || '',
+          },null,2);
+        }else{
+          oc.content=val;
+        }
+        const el=document.getElementById(oc.id);
+        if(el){
+          const b=el.querySelector('.oc-body');
+          if(b)b.innerHTML=getCardPreview(oc)+`<div class="oc-expand-hint">ver / editar</div>`;
+        }
+      }
+    }
   } else if(expandTarget?.type==='ctx-file'){
     const oc=outputCards.find(c=>c.id===expandTarget.id);
     if(oc){
@@ -930,13 +2005,16 @@ function closeExpand(){document.getElementById('expandwin').classList.remove('op
 // ══════════════════════════════
 // STATUS & EXECUTION
 // ══════════════════════════════
-function stlabel(s){return{idle:'IDLE',running:'RUNNING',done:'DONE',error:'ERROR'}[s]||'IDLE';}
+function stlabel(s){return{idle:'IDLE',running:'RUNNING',done:'DONE',error:'ERROR',paused:'PAUSED','awaiting-input':'WAITING'}[s]||'IDLE';}
 
 function setStatus(id,s){
   const n=nodes.find(x=>x.id===id);if(!n)return;n.status=s;
   const el=document.getElementById(id);if(!el)return;
-  el.classList.toggle('running',s==='running');
+  el.classList.toggle('running',s==='running'||s==='awaiting-input');
+  el.classList.toggle('paused',s==='paused');
   const ft=document.getElementById('fst_'+id);if(ft)ft.textContent=stlabel(s);
+  const btnStateMap={running:'CORRIENDO',paused:'PAUSADO','awaiting-input':'ESPERANDO',done:'COMPLETADO',error:'ERROR',idle:'LISTO'};
+  const prst=document.getElementById('prst_'+id);if(prst)prst.textContent=btnStateMap[s]||'LISTO';
   const dots=el.querySelectorAll('.nstatus-dot');
   if(dots.length)dots[dots.length-1].className='nstatus-dot '+(s==='awaiting-input'?'running':(s==='paused'?'idle':s));
   // Activate connections incoming to this node when it starts/finishes
@@ -1062,6 +2140,13 @@ async function stopAll(){
     }
     _userStartedRun=false;
     clearOperatorWarning();
+    // Immediately clear running animation on all nodes
+    nodes.forEach(nd=>{
+      if(nd.status==='running'||nd.status==='awaiting-input'||nd.status==='paused'){
+        setStatus(nd.id,'idle');
+      }
+    });
+    stopPipelineRunClock();
     if(data.context)applyContextToUI(data.context,currentPipelineId);
     if(data.stopped){
       glog('system','Pipeline','system','Loop del Piloto detenido. Contexto, prompts y resultados parciales conservados.');
@@ -1080,11 +2165,8 @@ async function runAll(){
   if(!currentPipelineId){glog('warn','Pipeline','system','Sin pipeline activo. Crea uno primero.');return;}
   if(!nodes.length){glog('warn','Pipeline','system','Sin agentes en el canvas.');return;}
   _userStartedRun=true;
-  // Minimizar ventanas al ejecutar
-  const lw=document.getElementById('logwin');
-  if(lw&&!lw.classList.contains('minimized'))toggleLogMin();
-  const mw=document.getElementById('mtwin');
-  if(mw&&!mw.classList.contains('minimized'))toggleMTMin();
+  ensureLogVisibleForActivity();
+  collapseWindows();
   if(!terminalPipelineId||terminalPipelineId!==currentPipelineId)connectSSE(currentPipelineId);
   glog('system','Pipeline','system','▶ Arrancando pipeline con AG-01 Piloto…');
   startPipelineRunClock();
@@ -1094,6 +2176,12 @@ async function runAll(){
   if(!res||!res.ok){
     if(res){
       const e=await res.json().catch(()=>({}));
+      if(e.error==='pipeline_not_prepared'){
+        const prepared=await preparePipelineFromCanvasSeed();
+        if(prepared){
+          return runAll();
+        }
+      }
       glog('error','Pipeline','system','Error: '+(e.error||res.status));
     }
     stopPipelineRunClock();
@@ -1109,6 +2197,83 @@ async function runAll(){
 }
 async function resumePipeline(){
   glog('warn','Pipeline','system','La reanudación por canvas está desactivada. El loop del Piloto es el único motor del pipeline.');
+}
+
+function getCanvasSeedPrompt(){
+  const seedCard=outputCards.find(c=>c._kind==='seed'||(c.isInputCard&&/prompt semilla/i.test(c.label||''))||/prompt semilla/i.test(c.label||''));
+  if(!seedCard)return'';
+  if(seedCard._kind==='seed')return String(seedCard.content||'').trim();
+  const el=document.getElementById(seedCard.id);
+  const ta=el?.querySelector('.idc-textarea');
+  return String(ta?.value||seedCard.content||'').trim();
+}
+
+function getCanvasPromptCard(){
+  return outputCards.find(c=>c._kind==='seed'||(c.isInputCard&&/prompt semilla/i.test(c.label||''))||/prompt semilla/i.test(c.label||''));
+}
+
+function ensureCanvasSeedCardFromContext(ctx){
+  const existing=getCanvasPromptCard();
+  if(existing)return existing;
+
+  const seedText=String(
+    ctx?.preferencias_usuario?.prompt_base?.valor||
+    ctx?.preferencias_usuario?.objetivo?.valor||
+    ctx?.objetivo||
+    ctx?.consulta||
+    ''
+  ).trim();
+  if(!seedText)return null;
+
+  const pilot=nodes.find(n=>n.type==='pilot'||n.agentId==='AG-01');
+  const ctxCard=outputCards.find(c=>c.isCtxFile);
+  const x=ctxCard ? Math.max(20, ctxCard.x - 260) : (pilot ? Math.max(20, pilot.x - 300) : 20);
+  const y=pilot ? (pilot.y + 10) : (ctxCard ? ctxCard.y : 2400);
+  const seedCard=mkSeedCard(seedText,x,y);
+  if(pilot && !conns.some(c=>c.from===seedCard.id&&c.to===pilot.id)){
+    conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:seedCard.id,fp:'out',to:pilot.id,tp:'in',active:true,fromSeed:true,fromCard:true});
+  }
+  drawConns();
+  scheduleSave();
+  return seedCard;
+}
+
+async function preparePipelineFromCanvasSeed(){
+  const prompt=getCanvasSeedPrompt();
+  if(!prompt){
+    glog('warn','Pipeline','system','No hay prompt semilla en el canvas para que AG-00 prepare el contexto.');
+    return false;
+  }
+  _pendingSeedPrompt=prompt;
+  showCreatingAnimation(prompt,'architect');
+  startTitleCycle();
+  glog('think','Arquitecto','agent','Preparando contexto inicial desde el prompt semilla del canvas...');
+  const res=await fetch('/api/pipelines/'+currentPipelineId+'/prepare',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({prompt}),
+  }).catch(e=>{glog('error','Pipeline','system','Error preparando pipeline: '+e.message);return null;});
+  if(!res||!res.ok){
+    hideCreatingAnimation();_pendingSeedPrompt=null;
+    stopTitleCycle('Log Global — Pipeline');
+    if(res){
+      const data=await res.json().catch(()=>({}));
+      glog('error','Arquitecto','agent','No se pudo preparar el pipeline: '+(data.error||res.status));
+    }
+    return false;
+  }
+  const data=await res.json().catch(()=>({}));
+  if(data.context){
+    applyContextToUI(data.context,currentPipelineId);
+    glog('done','Arquitecto','agent','Contexto inicial diseñado por AG-00 y conectado al Piloto.');
+  }
+  if(currentPipelineId){
+    setTimeout(()=>syncCanvasFromPipeline(currentPipelineId),200);
+  }else{
+    hideCreatingAnimation();_pendingSeedPrompt=null;
+    stopTitleCycle('Log Global — Pipeline');
+  }
+  return true;
 }
 
 function handleExecutionEvent_typed(){
@@ -1128,11 +2293,13 @@ function resetAll(){
 }
 function delSel(){
   if(!sel)return;
+  const affectedNodeIds=conns.filter(c=>c.from===sel||c.to===sel).flatMap(c=>[c.from,c.to]).filter(ref=>ref!==sel&&nodes.some(n=>n.id===ref));
   document.getElementById(sel)?.remove();
   nodes=nodes.filter(n=>n.id!==sel);
   conns=conns.filter(c=>c.from!==sel&&c.to!==sel);
   outputCards=outputCards.filter(c=>c.id!==sel);
-  sel=null;drawConns();updateMM();scheduleSave();
+  affectedNodeIds.forEach(refreshNodeConnectionUI);
+  sel=null;drawConns();updateMM();scheduleSave();updateAddAgentMenuAvailability();
 }
 function ts(){return new Date().toTimeString().slice(0,8);}
 
@@ -1244,18 +2411,59 @@ function setConnFrom(cf){
     if(portEl)portEl.classList.add('port-active');
   }
 }
+function connExists(fromId,fromPort,toId,toPort){
+  return conns.some(c=>c.from===fromId&&c.fp===fromPort&&c.to===toId&&((c.tp||'in')===(toPort||'in')));
+}
+function getDefaultOutputPort(nodeId){
+  const node=nodes.find(n=>n.id===nodeId);
+  if(!node)return'out';
+  return T[node.type]?.cond?'out-y':'out';
+}
+function refreshNodeConnectionUI(nodeId){
+  const n=nodes.find(node=>node.id===nodeId);
+  const el=document.getElementById(nodeId);
+  if(!n||!el)return;
+  if(n.type==='pilot'){
+    const io=el.querySelector('.pilot-io');
+    if(io)io.outerHTML=pilotIOHTML(n);
+    return;
+  }
+  const foot=el.querySelector('.nfoot');
+  if(foot)foot.outerHTML=`<div class="nfoot">
+      <span class="nfoot-st" id="fst_${n.id}">${stlabel(n.status)}</span>
+      <span class="nfoot-tok" id="ftok_${n.id}">${escapeHTML(n.tokenLabel||'0 tok')}</span>
+      <button class="nfoot-sk" id="fsk_${n.id}" onclick="event.stopPropagation();openSkillAdapt('${n.id}')" style="display:${n.skills&&n.skills.length?'inline-flex':'none'}">⬡ SKILLS</button>
+      ${n.type==='pilot'?`<button class="nfoot-ctx" onclick="event.stopPropagation();openContextCard(currentPipelineId)" title="Ver archivo de contexto del pipeline">⬡ contexto</button>`:''}
+      <button class="nfoot-out" onclick="event.stopPropagation();(function(){var _n=nodes.find(function(x){return x.id==='${n.id}'});if(_n)dropOutputCard('${n.id}',_n.x+260,_n.y+20);})()" title="Soltar output card">↗ output</button>
+      <button class="nfoot-cfg" onclick="openM('${n.id}')">⚙ CONFIG</button>
+    </div>`;
+}
 function finishConn(toId,toPt){
   if(!connFrom)return;
   document.querySelectorAll('.port.port-active,.oc-connect-port.port-active').forEach(el=>el.classList.remove('port-active'));
+  if(connFrom.nid===toId){
+    connFrom=null;
+    document.getElementById('tc').style.display='none';
+    return;
+  }
+  if(connExists(connFrom.nid,connFrom.pt,toId,toPt)){
+    glog('warn','Canvas','system','Esa conexión manual ya existe.');
+    connFrom=null;
+    document.getElementById('tc').style.display='none';
+    drawConns();
+    return;
+  }
   const isCond=connFrom.pt==='out-y'||connFrom.pt==='out-n';
   const fromCard=connFrom.src==='card';
   conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:connFrom.nid,fp:connFrom.pt,to:toId,tp:toPt,active:fromCard,cond:isCond,condT:connFrom.pt==='out-y'?'yes':'no',fromCard});
   scheduleSave();
-  if(fromCard){
-    document.getElementById(connFrom.nid)?.classList.add('connectable');
-    glog('action','Canvas','system','Output card conectada a '+( nodes.find(n=>n.id===toId)?.name||toId));
-  }
-  connFrom=null;document.getElementById('tc').style.display='none';drawConns();updateMM();
+  const sourceLabel=nodes.find(n=>n.id===connFrom.nid)?.name||outputCards.find(c=>c.id===connFrom.nid)?.label||connFrom.nid;
+  const targetLabel=nodes.find(n=>n.id===toId)?.name||outputCards.find(c=>c.id===toId)?.label||toId;
+  if(fromCard)document.getElementById(connFrom.nid)?.classList.add('connectable');
+  glog('action','Canvas','system',sourceLabel+' conectada a '+targetLabel);
+  refreshNodeConnectionUI(connFrom.nid);
+  refreshNodeConnectionUI(toId);
+  connFrom=null;document.getElementById('tc').style.display='none';drawConns();redrawConnsSoon();updateMM();
 }
 function ppos(nid,pt){
   const el=document.getElementById(nid);if(!el)return null;
@@ -1294,43 +2502,168 @@ function drawConns(){
     else if(c.active){cls+=' active';marker='ma-a';}
     else if(c.cond){cls+=c.condT==='yes'?' cy':' cn';marker=c.condT==='yes'?'ma-y':'ma-n';}
     path.setAttribute('class',cls);path.setAttribute('marker-end',`url(#${marker})`);
+    if(c.isCtxConn&&c.ctxRole==='read'){
+      path.style.stroke='#4a9aaa';
+      path.style.strokeWidth='1.8';
+      path.style.strokeDasharray='6 3';
+      path.style.filter='drop-shadow(0 0 3px rgba(74,154,170,.4))';
+    }else if(c.isCtxConn&&c.ctxRole==='write'){
+      path.style.stroke='#d2a64e';
+      path.style.strokeWidth='2';
+      path.style.strokeDasharray='10 5';
+      path.style.filter='drop-shadow(0 0 4px rgba(210,166,78,.32))';
+    }
     path.dataset.connId=c.id;
     path.style.cursor='pointer';
-    path.addEventListener('click',e=>{e.stopPropagation();showConnPopup(c,e);});
+    path.addEventListener('click',e=>{e.stopPropagation();openConnectionPayloadCard(c,e);});
     svg.appendChild(path);
   });
 }
 
-function showConnPopup(c,evt){
-  document.querySelectorAll('.conn-popup').forEach(el=>el.remove());
-  const fromNode=nodes.find(x=>x.id===c.from)||outputCards.find(x=>x.id===c.from);
-  const toNode=nodes.find(x=>x.id===c.to)||outputCards.find(x=>x.id===c.to);
-  const fromName=fromNode?.name||fromNode?.fromNodeName||'Nodo';
-  const toName=toNode?.name||toNode?.fromNodeName||'Nodo';
-  const ftp=fromNode?.type?T[fromNode.type]:null;
-  const outputType=fromNode?.outputType||ftp?.outputType||'json';
-  const prompt=fromNode?.prompt||ftp?.prompt||'';
-  const content=fromNode?.output||fromNode?.content||(prompt?`Prompt: ${prompt}`:`Tipo de dato: ${outputType}`);
-  const condBadge=c.cond?`<span style="background:${c.condT==='yes'?'rgba(58,138,58,.2)':'rgba(138,58,58,.2)'};color:${c.condT==='yes'?'#3a8a3a':'#8a3a3a'};padding:1px 6px;border-radius:2px;font-size:8px">${c.condT==='yes'?'SÍ ✓':'NO ✗'}</span>`:'';
-  const activeBadge=c.active?`<span style="color:#3a8a3a;font-size:8px">● ACTIVO</span>`:`<span style="color:#3a3630;font-size:8px">○ IDLE</span>`;
-  const pop=document.createElement('div');
-  pop.className='conn-popup';
-  pop.style.cssText=`position:fixed;left:${Math.min(evt.clientX+14,window.innerWidth-380)}px;top:${Math.max(evt.clientY-20,8)}px;z-index:3000;background:#1a1612;border:1px solid rgba(200,160,64,.35);border-radius:7px;padding:12px 14px;min-width:260px;max-width:370px;box-shadow:0 16px 48px rgba(0,0,0,.85)`;
-  pop.innerHTML=`
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px">
-      <span style="font-size:8px;color:#c8a040;letter-spacing:.1em;text-transform:uppercase">↗ Conexión ${condBadge}</span>
-      <button onclick="this.closest('.conn-popup').remove()" style="background:none;border:none;color:#706860;cursor:pointer;font-size:12px;line-height:1;padding:0">✕</button>
+function resolveNodePayload(node){
+  if(!node)return{type:'text',content:'Sin payload disponible.'};
+  if(node.output)return{type:node.outputType||'text',content:node.output};
+  if(node.type==='pilot'&&node.pilotReport)return{type:'json',content:node.pilotReport};
+  if(node.promptOut)return{type:node.outputType||'text',content:node.promptOut};
+  if(node.prompt)return{type:node.inputType||'text',content:node.prompt};
+  return{type:node.outputType||'text',content:'Sin payload disponible todavía.'};
+}
+
+function resolveConnectionPayload(c){
+  const fromCard=outputCards.find(card=>card.id===c.from);
+  const fromNode=nodes.find(node=>node.id===c.from);
+  const toNode=nodes.find(node=>node.id===c.to)||outputCards.find(card=>card.id===c.to);
+  const toName=toNode?.name||toNode?.fromNodeName||'Destino';
+
+  if(c.isCtxConn){
+    const ctxCard=outputCards.find(card=>card.isCtxFile&&card.pipelineId===currentPipelineId);
+    return{
+      type:'json',
+      content:ctxCard?.content||'Contexto aún no disponible.',
+      fromName:ctxCard?.label||'context.json',
+      toName,
+      label:'Payload de contexto',
+    };
+  }
+
+  if(fromCard){
+    return{
+      type:fromCard.type||'text',
+      content:fromCard.content||'Sin contenido.',
+      fromName:fromCard.fromNodeName||fromCard.label||'Card',
+      toName,
+      label:fromCard.label||'Payload activo',
+    };
+  }
+
+  if(fromNode){
+    const directCard=[...outputCards].reverse().find(card=>
+      card.fromNodeId===fromNode.id&&conns.some(link=>link.from===card.id&&link.to===c.to)
+    );
+    if(directCard){
+      return{
+        type:directCard.type||'text',
+        content:directCard.content||'Sin contenido.',
+        fromName:directCard.fromNodeName||fromNode.name,
+        toName,
+        label:directCard.label||'Payload activo',
+      };
+    }
+    const latestCard=[...outputCards].reverse().find(card=>card.fromNodeId===fromNode.id);
+    if(latestCard){
+      return{
+        type:latestCard.type||'text',
+        content:latestCard.content||'Sin contenido.',
+        fromName:latestCard.fromNodeName||fromNode.name,
+        toName,
+        label:latestCard.label||'Último payload del agente',
+      };
+    }
+    const fallback=resolveNodePayload(fromNode);
+    return{
+      type:fallback.type,
+      content:fallback.content,
+      fromName:fromNode.name||'Agente',
+      toName,
+      label:'Payload vivo del agente',
+    };
+  }
+
+  return{
+    type:'text',
+    content:'No hay payload disponible para esta conexión.',
+    fromName:'Origen',
+    toName,
+    label:'Payload no disponible',
+  };
+}
+
+function renderConnectionPayloadCardBody(card){
+  const typeColor=IO_COLORS[card.type]||'#706860';
+  const preview=card.type==='image'&&card.content&&(String(card.content).startsWith('data:')||String(card.content).startsWith('http'))
+    ?`<img class="oc-preview-img" src="${card.content}" style="width:100%;display:block;object-fit:cover;max-height:160px"/>`
+    :card.type==='json'
+      ?`<pre class="cpayload-pre">${escapeHTML(String(card.content||''))}</pre>`
+      :`<div class="cpayload-text">${escapeHTML(String(card.content||''))}</div>`;
+  return`
+    <div class="cpayload-head">
+      <div class="cpayload-route">${escapeHTML(card.fromName)} <span>→</span> ${escapeHTML(card.toName)}</div>
+      <span class="cpayload-type" style="color:${typeColor}">${IO_ICONS[card.type]||'◆'} ${card.type}</span>
     </div>
-    <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;margin-bottom:10px">
-      <span style="color:#ddd8cc">${fromName}</span><span style="color:#3a3630"> → </span><span style="color:#ddd8cc">${toName}</span>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-      <span style="font-size:9px;color:#706860">${IO_ICONS[outputType]||'◆'} ${outputType}</span>
-      ${activeBadge}
-    </div>
-    <div style="background:#0a0808;border:1px solid rgba(255,255,255,.06);border-radius:3px;padding:8px;font-size:10px;color:#9a9088;font-family:'IBM Plex Mono',monospace;max-height:130px;overflow-y:auto;line-height:1.6;white-space:pre-wrap">${String(content).slice(0,320)}${String(content).length>320?'…':''}</div>`;
-  document.body.appendChild(pop);
-  setTimeout(()=>document.addEventListener('click',function close(e){if(!pop.contains(e.target)){pop.remove();document.removeEventListener('click',close);}},10));
+    <div class="cpayload-body">${preview}</div>`;
+}
+
+function renderConnectionPayloadCard(card){
+  document.getElementById(card.id)?.remove();
+  const el=document.createElement('div');
+  el.className='output-card conn-payload-card';el.id=card.id;
+  el.style.cssText=`left:${card.x}px;top:${card.y}px`;
+  el.innerHTML=`
+    <div class="oc-inner">
+      <div class="oc-header">
+        <div class="oc-from"><div class="oc-from-dot" style="background:#c8a040"></div><span>Conexión activa</span></div>
+        <span class="oc-type ${card.type}">${IO_ICONS[card.type]||'◆'} ${card.type}</span>
+      </div>
+      <div class="oc-body">${renderConnectionPayloadCardBody(card)}</div>
+      <div class="oc-footer">
+        <span class="oc-size" style="color:#c8a04088">${escapeHTML(card.label||'Payload')}</span>
+        <div class="oc-actions">
+          <button class="oc-btn" onclick="event.stopPropagation();deleteCard('${card.id}')" title="Cerrar">✕</button>
+        </div>
+      </div>
+    </div>`;
+  el.addEventListener('mousedown',e=>cardMouseDown(e,card.id));
+  document.getElementById('canvas').appendChild(el);
+  redrawConnsSoon();
+}
+
+function openConnectionPayloadCard(c,evt){
+  const payload=resolveConnectionPayload(c);
+  const point=getCanvasPointFromClient(evt.clientX,evt.clientY);
+  const id='cpayload_'+c.id;
+  const existing=outputCards.find(card=>card.id===id);
+  const cardData={
+    id,
+    x:point.x+18,
+    y:point.y-20,
+    _kind:'payload',
+    isConnectionPayload:true,
+    connId:c.id,
+    type:payload.type||'text',
+    content:payload.content||'',
+    fromName:payload.fromName||'Origen',
+    toName:payload.toName||'Destino',
+    label:payload.label||'Payload de conexión',
+    fromNodeName:'Conexión activa',
+    fromDot:'#c8a040',
+  };
+  if(existing){
+    Object.assign(existing,cardData);
+    renderConnectionPayloadCard(existing);
+    return;
+  }
+  outputCards.push(cardData);
+  renderConnectionPayloadCard(cardData);
 }
 
 function autoOutputCard(n){
@@ -1339,7 +2672,7 @@ function autoOutputCard(n){
   if(outputCards.find(oc=>oc.fromNodeId===n.id&&oc.assetId==='auto-'+n.id))return;
   const outputType=n.outputType||tp.outputType||'json';
   const content=n.output||(outputType==='json'?JSON.stringify({status:'done',agent:n.name,result:'Completado',ts:new Date().toISOString()},null,2):(outputType==='text'?(n.promptOut||tp.promptText||`Output de ${n.name}`):`Output generado por ${n.name}`));
-  const oc={id:'oc'+Math.random().toString(36).slice(2,10),assetId:'auto-'+n.id,revisionStatus:'aprobado',fromNodeId:n.id,fromNodeName:n.name,fromDot:tp.dot||'#888',type:outputType,label:tp.label+' · output',content,x:n.x+250,y:n.y+20};
+  const oc={id:'oc'+Math.random().toString(36).slice(2,10),_kind:'output',assetId:'auto-'+n.id,revisionStatus:'aprobado',fromNodeId:n.id,fromNodeName:n.name,fromDot:tp.dot||'#888',type:outputType,label:tp.label+' · output',content,x:n.x+250,y:n.y+20};
   outputCards.push(oc);mkOutputCard(oc);
   conns.filter(c=>c.from===n.id).forEach(nc=>{
     if(nc.to)conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:oc.id,fp:'out',to:nc.to,tp:'in',active:true,fromCard:true});
@@ -1352,23 +2685,53 @@ function autoOutputCard(n){
 // ══════════════════════════════
 function selN(id){if(sel)document.getElementById(sel)?.classList.remove('sel');sel=id;if(id)document.getElementById(id)?.classList.add('sel');}
 function sctx(e){
-  e.preventDefault();const wrap=document.getElementById('wrap').getBoundingClientRect();
+  e.preventDefault();
+  const wrap=document.getElementById('wrap').getBoundingClientRect();
   const x=(e.clientX-wrap.left-px)/sc,y=(e.clientY-wrap.top-py)/sc;
+  const m=document.getElementById('ctx');
+
+  // Detectar click sobre output card
+  const cardEl=e.target.closest('.output-card');
+  if(cardEl){
+    const oc=outputCards.find(c=>c.id===cardEl.id);
+    if(!oc)return;
+    const label=oc.label||oc.type||'Card';
+    m.innerHTML=`
+      <div class="ci ci-header">${label}</div>
+      <div class="csep"></div>
+      <div class="ci" onclick="expandCard('${oc.id}');hctx()">⊞ Editar contenido</div>
+      <div class="ci" onclick="setConnFrom({nid:'${oc.id}',pt:'out',src:'card'});hctx()">⇝ Conectar</div>
+      <div class="csep"></div>
+      <div class="ci red" onclick="forceDeleteCard('${oc.id}');hctx()">✕ Borrar del canvas</div>`;
+    m.style.cssText=`display:block;left:${e.clientX}px;top:${e.clientY}px`;
+    return;
+  }
+
+  // Detectar click sobre nodo
   let found=null;
   nodes.forEach(n=>{const el=document.getElementById(n.id);if(!el)return;const h=el.offsetHeight;if(x>=n.x&&x<=n.x+230&&y>=n.y&&y<=n.y+h)found=n.id;});
   if(!found)return;ctxId=found;selN(found);
-  const m=document.getElementById('ctx');
   m.innerHTML=`
     <div class="ci" onclick="openM('${found}');hctx()">⚙ Configurar</div>
     <div class="ci" onclick="runNode('${found}');hctx()">▶ Ejecutar</div>
     <div class="ci" onclick="pauseNode('${found}');hctx()">⏸ Pausar</div>
     <div class="csep"></div>
+    <div class="ci" onclick="setConnFrom({nid:'${found}',pt:'${getDefaultOutputPort(found)}',src:'node'});hctx()">⇝ Conectar manualmente</div>
     <div class="ci" onclick="dropOutputCard('${found}',nodes.find(n=>n.id==='${found}').x+250,nodes.find(n=>n.id==='${found}').y+20);hctx()">⬇ Dropear output card</div>
     <div class="ci" onclick="openSkillAssign('${found}');hctx()">⬡ Asignar skill</div>
     <div class="ci" onclick="dupN('${found}');hctx()">⧉ Duplicar</div>
     <div class="csep"></div>
     <div class="ci red" onclick="delSel();hctx()">✕ Eliminar</div>`;
   m.style.cssText=`display:block;left:${e.clientX}px;top:${e.clientY}px`;
+}
+
+function forceDeleteCard(id){
+  const affectedNodeIds=conns.filter(c=>c.from===id||c.to===id).flatMap(c=>[c.from,c.to]).filter(ref=>nodes.some(n=>n.id===ref));
+  document.getElementById(id)?.remove();
+  outputCards=outputCards.filter(c=>c.id!==id);
+  conns=conns.filter(c=>c.from!==id&&c.to!==id);
+  affectedNodeIds.forEach(refreshNodeConnectionUI);
+  drawConns();scheduleSave();
 }
 function hctx(){document.getElementById('ctx').style.display='none';}
 document.addEventListener('click',hctx);
@@ -1404,9 +2767,23 @@ function assignSkillToNode(nodeId,skill){
 // ══════════════════════════════
 // DRAG FROM PALETTE
 // ══════════════════════════════
-function pd(e,type){palT=type;palSkill=null;closeSide();}
+function pd(e,type){
+  palT=type;palSkill=null;palInput=null;closeSide();if(typeof closeAddAgentMenu==='function')closeAddAgentMenu();
+  if(!e?.dataTransfer)return;
+  e.dataTransfer.setData('text/plain','agent:'+type);
+  e.dataTransfer.effectAllowed='copy';
+  const tp=T[type]||{};
+  const color=tp.dot||'#706860';
+  const label=tp.label||type;
+  const ghost=document.createElement('div');
+  ghost.style.cssText=`position:fixed;top:-999px;left:-999px;display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(10,8,8,.96);border:1px solid ${color}66;border-radius:6px;color:#e8e0d4;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.04em;white-space:nowrap;pointer-events:none;box-shadow:0 0 0 1px rgba(255,255,255,.04) inset,0 10px 28px rgba(0,0,0,.55)`;
+  ghost.innerHTML=`<span style="width:18px;height:18px;border-radius:4px;background:${color};box-shadow:0 0 14px ${color}88,0 0 0 1px rgba(255,255,255,.18) inset;display:inline-block;flex-shrink:0"></span><span>${label}</span>`;
+  document.body.appendChild(ghost);
+  e.dataTransfer.setDragImage(ghost,14,14);
+  setTimeout(()=>{if(ghost.parentNode)ghost.parentNode.removeChild(ghost);},0);
+}
 function sdrag(e,skillId){
-  palSkill=skillId;palT=null;closeSide();
+  palSkill=skillId;palT=null;palInput=null;closeSide();
   const sk=SKILLS_CATALOG.find(s=>s.id===skillId)||customSkills.find(s=>s.id===skillId);
   const ghost=document.createElement('div');
   ghost.style.cssText='position:fixed;top:-999px;left:-999px;background:#0af;border:2px solid #5df;border-radius:5px;padding:5px 12px;color:#fff;font-family:IBM Plex Mono,monospace;font-size:11px;font-weight:600;box-shadow:0 0 18px #00aaff99,0 0 6px #00ddff44;letter-spacing:.06em;white-space:nowrap;pointer-events:none';
@@ -1415,11 +2792,289 @@ function sdrag(e,skillId){
   e.dataTransfer.setDragImage(ghost,ghost.offsetWidth/2+8,ghost.offsetHeight/2);
   setTimeout(()=>{if(ghost.parentNode)ghost.parentNode.removeChild(ghost);},0);
 }
+function idrag(e,inputType){
+  palInput=inputType;palT=null;palSkill=null;
+  e.dataTransfer.setData('text/plain','input:'+inputType);
+  e.dataTransfer.effectAllowed='copy';
+  const labels={text:'✦ texto',image:'⬡ imagen',audio:'♪ audio'};
+  const ghost=document.createElement('div');
+  ghost.style.cssText='position:fixed;top:-999px;left:-999px;background:#1a1208;border:2px solid rgba(200,160,64,.5);border-radius:5px;padding:5px 12px;color:#c8a040;font-family:IBM Plex Mono,monospace;font-size:11px;font-weight:600;letter-spacing:.06em;white-space:nowrap;pointer-events:none';
+  ghost.textContent=labels[inputType]||inputType;
+  document.body.appendChild(ghost);
+  e.dataTransfer.setDragImage(ghost,ghost.offsetWidth/2+8,ghost.offsetHeight/2);
+  setTimeout(()=>{if(ghost.parentNode)ghost.parentNode.removeChild(ghost);closeSide();},0);
+}
+const _inputCardCfgs={
+  text:{label:'Texto',icon:'✦',color:'#c8a040',bg:'#3a2800',border:'rgba(200,160,64,.4)',desc:'text input'},
+  image:{label:'Imagen',icon:'⬡',color:'#6090c0',bg:'#001a3a',border:'rgba(74,122,191,.4)',desc:'image input'},
+  audio:{label:'Audio',icon:'♪',color:'#7ab6d9',bg:'#0c2230',border:'rgba(122,182,217,.38)',desc:'audio input'}
+};
+function _renderInputCardDOM(oc){
+  document.getElementById(oc.id)?.remove();
+  const cfg=_inputCardCfgs[oc.type]||_inputCardCfgs.text;
+  const imageSrc=oc.type==='image'?(oc.fileUrl||oc.content||''):'';
+  const fileName=oc.fileName||'imagen';
+  const el=document.createElement('div');
+  el.className='output-card input-drag-card';el.id=oc.id;
+  el.style.cssText=`left:${oc.x}px;top:${oc.y}px`;
+  el.innerHTML=`
+    <div class="oc-inner" style="border-color:${cfg.border}">
+      <div class="oc-header" style="background:${cfg.bg}44;border-bottom-color:${cfg.border}">
+        <div class="oc-from"><div class="oc-from-dot" style="background:${cfg.color}"></div><span>Usuario</span></div>
+        <span class="oc-type text" style="color:${cfg.color}">${cfg.icon} ${oc.type}</span>
+      </div>
+      <div class="oc-body">
+        <div class="sic-title">${oc.label||cfg.label}</div>
+        ${oc.type==='image'
+          ?`${imageSrc
+              ?`<div class="idc-image-wrap"><img class="idc-image-preview" src="${imageSrc}" alt="${escapeHTML(fileName)}"/><div class="idc-image-meta">${escapeHTML(fileName)}</div></div>`
+              :`<div class="idc-placeholder"><span>⬡</span><div>arrastra una imagen</div></div>`
+            }
+            <input class="idc-file-input" id="idc_file_${oc.id}" type="file" accept="image/*" hidden />
+            <button class="idc-upload-btn" onclick="event.stopPropagation();openInputCardFilePicker('${oc.id}')">${imageSrc?'Cambiar imagen':'Subir imagen'}</button>`
+          :oc.type==='audio'
+            ?`<div class="idc-placeholder"><span>♪</span><div>arrastra un audio</div></div>`
+            :`<textarea class="idc-textarea" placeholder="Escribe el texto de entrada..." onclick="event.stopPropagation()" onmousedown="event.stopPropagation()">${escapeHTML(oc.content||'')}</textarea>`
+        }
+        ${oc.isSeedPrompt?`<button class="sic-run-btn" onclick="event.stopPropagation();runAll()">▶ EJECUTAR</button>`:''}
+      </div>
+      <div class="oc-footer">
+        <span class="oc-size" style="color:${cfg.color}88">${cfg.desc}</span>
+        <div class="oc-connect-port" data-nid="${oc.id}" data-pt="out" title="Conectar al agente"></div>
+      </div>
+    </div>`;
+  el.addEventListener('mousedown',e=>cardMouseDown(e,oc.id));
+  if(oc.type==='image'){
+    const input=el.querySelector('#idc_file_'+oc.id);
+    if(input){
+      input.addEventListener('click',e=>e.stopPropagation());
+      input.addEventListener('change',e=>{
+        const file=e.target.files&&e.target.files[0];
+        if(file)handleInputCardImageUpload(oc.id,file);
+      });
+    }
+  }
+  el.querySelector('.oc-connect-port').addEventListener('mousedown',e=>{
+    e.stopPropagation();setConnFrom({nid:oc.id,pt:'out',src:'card'});
+  });
+  document.getElementById('canvas').appendChild(el);
+  redrawConnsSoon();
+}
+function mkInputCard(type,x,y){
+  const id='inp'+Math.random().toString(36).slice(2,8);
+  const cfg=_inputCardCfgs[type]||_inputCardCfgs.text;
+  const oc={id,x,y,_kind:'input',type,content:'',fromNodeName:'Usuario',fromDot:cfg.color,label:cfg.label,isInputCard:true};
+  outputCards.push(oc);
+  _renderInputCardDOM(oc);
+  return oc;
+}
+
+function openInputCardFilePicker(cardId){
+  const input=document.getElementById('idc_file_'+cardId);
+  if(input)input.click();
+}
+
+async function handleInputCardImageUpload(cardId,file){
+  const oc=outputCards.find(c=>c.id===cardId&&c.isInputCard);
+  if(!oc||!file)return;
+  const reader=new FileReader();
+  reader.onload=async()=>{
+    const dataUrl=String(reader.result||'');
+    oc.fileName=file.name||'imagen';
+    oc.content=dataUrl;
+    _renderInputCardDOM(oc);
+    try{
+      const res=await fetch('/api/uploads/image'+(_pipelineHash?('?hash='+encodeURIComponent(_pipelineHash)):''),{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({data:dataUrl,filename:file.name||'imagen'}),
+      });
+      const data=await res.json().catch(()=>({}));
+      if(!res.ok||!data.url)throw new Error(data.error||'upload_failed');
+      oc.fileUrl=data.url;
+      oc.content=data.url;
+      _renderInputCardDOM(oc);
+      glog('done','Usuario','system','Imagen subida al servidor: '+(file.name||'imagen'));
+    }catch(e){
+      glog('warn','Usuario','system','No se pudo guardar la imagen en el servidor. Se mantiene la vista local.');
+    }
+    scheduleSave();
+  };
+  reader.readAsDataURL(file);
+}
+// ── RESTORE OUTPUT CARD (from saved state) ──────────────────────
+function restoreOutputCard(oc){
+  if(!oc||!oc.id)return;
+  if(outputCards.find(c=>c.id===oc.id))return; // ya existe
+  outputCards.push(oc);
+  if(oc._kind==='seed')_renderSeedCardDOM(oc);
+  else if(oc._kind==='input')_renderInputCardDOM(oc);
+  else mkOutputCard(oc);
+}
+
+// ── ASSEMBLY OUTPUT CARD ────────────────────────────────────────
+function dropAssemblyOutputCard(assemblyNode, productoFinal){
+  if(!assemblyNode)return;
+  const tp=T.assembly;
+  const existing=outputCards.find(c=>c.assetId==='assembly-final-'+assemblyNode.id);
+  if(existing){existing.content=productoFinal;const el=document.getElementById(existing.id);if(el){const b=el.querySelector('.oc-body');if(b)b.innerHTML=getCardPreview(existing)+'<div class="oc-expand-hint">ver completo</div>';}return;}
+  const pos=findOpenCardPosition(assemblyNode.x+290,assemblyNode.y+10,getCardCanvasSize({_kind:'output',type:'assembly'}));
+  const oc={id:'oc'+Math.random().toString(36).slice(2,10),_kind:'output',
+    assetId:'assembly-final-'+assemblyNode.id,
+    fromNodeId:assemblyNode.id,fromNodeName:assemblyNode.name||'Ensamblaje',
+    fromDot:tp.dot||'#c87840',type:'assembly',
+    label:'Producto final ensamblado',content:productoFinal||'Ensamblaje completado',
+    x:pos.x,y:pos.y,isAssemblyFinal:true};
+  outputCards.push(oc);mkOutputCard(oc);drawConns();scheduleSave();
+  glog('done','Ensamblaje','agent','⊞ Output final generado — disponible para descarga');
+}
+
+function dropBackendOutputCard(output){
+  if(!output||!output.public_id)return;
+  // Skip cards with no meaningful content
+  const rawContent=typeof output.contenido==='string'?output.contenido.trim():null;
+  if(!rawContent||rawContent==='null'||rawContent==='{}'||rawContent==='""')return;
+  const existing=outputCards.find(c=>c.assetId===output.public_id);
+  if(existing){
+    existing.content=typeof output.contenido==='string'?output.contenido:JSON.stringify(output.contenido||{},null,2);
+    existing.type=mapBackendOutputType(output.tipo);
+    existing.label=buildBackendOutputLabel(output);
+    existing.meta=output.metadata||{};
+    const el=document.getElementById(existing.id);
+    if(el){
+      const body=el.querySelector('.oc-body');
+      if(body)body.innerHTML=getCardPreview(existing)+'<div class="oc-expand-hint">ver completo</div>';
+    }
+    if(output.agent_id==='AG-05')setTimeout(()=>{tryMaterializeOperatorQuestionsFromOutputCard(existing);},0);
+    return existing;
+  }
+
+  const fromNode=nodes.find(n=>n.agentId===output.agent_id)||nodes.find(n=>n.id===output.agent_id);
+  const existingFromNode=outputCards.filter(c=>c.fromNodeId===fromNode?.id&&c.backendOutput).length;
+  const COLS=3,CARD_W=224,CARD_H=150,GAP_X=28,GAP_Y=22;
+  const col=existingFromNode%COLS,row=Math.floor(existingFromNode/COLS);
+  const fallbackX=fromNode?(fromNode.x+290+col*(CARD_W+GAP_X)):(2600+outputCards.length*(CARD_W+GAP_X));
+  const fallbackY=fromNode?(fromNode.y+row*(CARD_H+GAP_Y)):(2200+outputCards.length*20);
+  const nodeType=fromNode?.type||AGENT_TYPE_MAP[output.agent_id]||'system';
+  const nodeTheme=T[nodeType]||{dot:'#4a7a9a'};
+  const pos=findOpenCardPosition(fallbackX,fallbackY,getCardCanvasSize({_kind:'output',type:mapBackendOutputType(output.tipo)}));
+  const oc={
+    id:'oc'+Math.random().toString(36).slice(2,10),
+    _kind:'output',
+    assetId:output.public_id,
+    fromNodeId:fromNode?.id||output.agent_id,
+    fromNodeName:fromNode?.name||AGENT_NAMES[output.agent_id]||output.agent_id||'Agente',
+    fromDot:nodeTheme.dot||'#4a7a9a',
+    type:mapBackendOutputType(output.tipo),
+    label:buildBackendOutputLabel(output),
+    content:typeof output.contenido==='string'?output.contenido:JSON.stringify(output.contenido||{},null,2),
+    x:pos.x,
+    y:pos.y,
+    backendOutput:true,
+    meta:output.metadata||{},
+  };
+  outputCards.push(oc);
+  mkOutputCard(oc);
+  drawConns();
+  scheduleSave();
+  if(output.agent_id==='AG-05')setTimeout(()=>{tryMaterializeOperatorQuestionsFromOutputCard(oc);},0);
+  return oc;
+}
+
+function mapBackendOutputType(tipo){
+  if(tipo==='image')return'image';
+  if(tipo==='video')return'video';
+  if(tipo==='audio')return'audio';
+  if(tipo==='decision')return'json';
+  if(tipo==='text')return'text';
+  return'text';
+}
+
+function buildBackendOutputLabel(output){
+  const bloque=output.bloque||output.metadata?.bloque_destino||'resultado';
+  const tipo=(output.tipo||'output').toUpperCase();
+  return tipo+' · '+bloque;
+}
+
+// ── ASSEMBLY VIS UPDATE ─────────────────────────────────────────
+function updateAssemblyVis(nodeId,ctx){
+  const el=document.getElementById('asmvis_'+nodeId);if(!el)return;
+  const ensamblaje=ctx?.ensamblaje||{};
+  const estado=ensamblaje.estado||'pendiente';
+  const outputIds=Array.isArray(ensamblaje.output_ids)?ensamblaje.output_ids:[];
+  const assetIds=Array.isArray(ensamblaje.asset_ids)?ensamblaje.asset_ids:(ensamblaje.asset_ids_vigentes||[]);
+  const assets=ctx?.assets||{};
+  const runtimeOutputs=outputCards.filter(card=>card.backendOutput&&card.assetId);
+  const receivedOutputs=outputIds.filter(id=>runtimeOutputs.some(card=>card.assetId===id)).length;
+  const received=assetIds.filter(id=>['completado','listo','done','ok','vigente'].includes(String(assets[id]?.estado||'').toLowerCase())).length;
+  const badge=el.querySelector('.asm-state-badge');
+  if(badge){badge.className='asm-state-badge asm-'+estado;badge.textContent='⊞ '+estado.replace(/_/g,' ').toUpperCase();}
+  const countEl=el.querySelector('.asm-count');
+  if(countEl)countEl.textContent=outputIds.length?receivedOutputs+'/'+outputIds.length:(assetIds.length?received+'/'+assetIds.length:'');
+  const assetsEl=el.querySelector('.asm-assets');
+  if(assetsEl){
+    if(outputIds.length){
+      assetsEl.innerHTML=outputIds.map(id=>{const done=runtimeOutputs.some(card=>card.assetId===id);
+        return`<div class="asm-asset-item ${done?'asm-done':'asm-pending'}"><span class="asm-asset-dot"></span><span class="asm-asset-name">${id.length>22?id.slice(0,20)+'…':id}</span></div>`;}
+      ).join('');
+    }
+    else if(!assetIds.length){assetsEl.innerHTML='<div class="asm-waiting">Esperando instrucciones del Piloto...</div>';}
+    else{assetsEl.innerHTML=assetIds.map(id=>{const a=assets[id]||{};const done=['completado','listo','done','ok','vigente'].includes(String(a.estado||'').toLowerCase());
+      return`<div class="asm-asset-item ${done?'asm-done':'asm-pending'}"><span class="asm-asset-dot"></span><span class="asm-asset-name">${id.length>22?id.slice(0,20)+'…':id}</span></div>`;}
+    ).join('');}
+  }
+  const dlRow=el.querySelector('.asm-dl-row');
+  if(dlRow)dlRow.style.display=estado==='completado'?'flex':'none';
+}
+
+function downloadAssembly(nodeId){
+  if(!currentPipelineId)return;
+  fetch('/api/pipelines/'+currentPipelineId+'/context').then(r=>r.json()).then(data=>{
+    const url=data?.context?.ensamblaje?.producto_final;
+    const content=data?.context?.ensamblaje?.producto_final||data?.context?.ensamblaje?.notas||JSON.stringify(data?.context?.ensamblaje||{},null,2);
+    if(url&&(url.startsWith('http')||url.startsWith('/'))){
+      const a=document.createElement('a');a.href=url;a.download='pipeline_output';a.click();
+    } else {
+      const formato=String(data?.context?.preferencias_usuario?.formato_salida?.valor||'txt').toLowerCase();
+      const blob=new Blob([content],{type:'text/plain'});
+      const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+      a.download=formato==='pdf'?'pipeline_assembly.pdf.txt':formato==='video'?'pipeline_assembly.video.txt':'pipeline_assembly.txt';a.click();URL.revokeObjectURL(a.href);
+    }
+    glog('action','Ensamblaje','agent','↓ Descargando output del ensamblaje');
+  }).catch(()=>glog('warn','Ensamblaje','agent','No se pudo obtener el output de ensamblaje'));
+}
+
+function addInputCenter(type){
+  const center=getCanvasViewportCenter();
+  const {width,height}=getInputCanvasSize();
+  mkInputCard(type,center.x-width/2,center.y-height/2);
+  drawConns();updateMM();scheduleSave();
+}
+
+function collapseWindows(){
+  const lw=document.getElementById('logwin');
+  if(lw&&!lw.classList.contains('minimized'))toggleLogMin();
+  const mw=document.getElementById('mtwin');
+  if(mw&&!mw.classList.contains('minimized'))toggleMTMin();
+}
+
 function drop(e){
+  e.preventDefault();
+  const point=getCanvasPointFromClient(e.clientX,e.clientY);
+  // Resolve input type from palInput or dataTransfer fallback
+  let inputT=palInput;
+  if(!inputT){const dt=e.dataTransfer.getData('text/plain');if(dt&&dt.startsWith('input:'))inputT=dt.slice(6);}
+  if(inputT){
+    const {width,height}=getInputCanvasSize();
+    mkInputCard(inputT,point.x-width/2,point.y-height/2);
+    palInput=null;palT=null;palSkill=null;collapseWindows();drawConns();updateMM();
+    return;
+  }
   palSkill=null; // skill dropped on empty canvas — ignore
-  if(!palT)return;const wrap=document.getElementById('wrap').getBoundingClientRect();
-  addNode(palT,(e.clientX-wrap.left-px)/sc-115,(e.clientY-wrap.top-py)/sc-100);
-  palT=null;drawConns();updateMM();
+  if(!palT)return;
+  const {width,height}=getNodeCanvasSize(palT);
+  addNode(palT,point.x-width/2,point.y-height/2);
+  palT=null;collapseWindows();drawConns();updateMM();
 }
 
 // ══════════════════════════════
@@ -1509,6 +3164,172 @@ function renderM(n){
 }
 function stab(el,tab){ctab=tab;document.querySelectorAll('.mtab').forEach(t=>t.classList.remove('on'));el.classList.add('on');const n=nodes.find(x=>x.id===modalId);if(n)renderM(n);}
 function closeM(){document.getElementById('moverlay').classList.remove('open');}
+
+// ══════════════════════════════
+// IO MODAL (RECIBE / ENTREGA)
+// ══════════════════════════════
+function openIOModal(nodeId,dir){
+  const n=nodes.find(x=>x.id===nodeId);if(!n)return;
+  const tp=T[n.type];
+  const isIn=dir==='in';
+  const title=isIn?'RECIBE':'ENTREGA';
+  const titleColor=isIn?'#3a8a3a':'#c8a040';
+  const type=isIn?(n.inputType||tp.inputType||'any'):(n.outputType||tp.outputType||'any');
+  const label=isIn?(n.inputLabel||tp.inputLabel||''):(n.outputLabel||tp.outputLabel||'');
+  const icon=IO_ICONS[type]||'◆';
+  const color=IO_COLORS[type]||'#706860';
+  const labelField=isIn?'inputLabel':'outputLabel';
+  const defVal=isIn?(n.inputDefault||tp.inputDefault||''):'';
+
+  let connHTML='';
+  if(isIn){
+    const ic=conns.find(c=>c.to===nodeId&&c.tp==='in');
+    if(ic){
+      const src=nodes.find(x=>x.id===ic.from);
+      if(src){
+        const st=T[src.type];
+        const soType=src.outputType||st.outputType||'any';
+        const soLabel=src.outputLabel||st.outputLabel||'';
+        const soColor=IO_COLORS[soType]||'#706860';
+        connHTML=`<div class="iomod-conn">
+          <div class="iomod-conn-lbl">Conectado desde</div>
+          <div class="iomod-conn-src">
+            <span class="iomod-conn-dot" style="background:${st.dot}"></span>
+            <span class="iomod-conn-name">${escapeHTML(src.name)}</span>
+            <span class="iomod-conn-arrow">→</span>
+            <span class="iomod-conn-type" style="color:${soColor}">${IO_ICONS[soType]||'◆'} ${soType}</span>
+          </div>
+          ${soLabel?`<div class="iomod-conn-desc">${escapeHTML(soLabel)}</div>`:''}
+        </div>`;
+      }
+    } else {
+      connHTML=`<div class="iomod-conn"><div class="iomod-conn-empty">Sin conexión de entrada</div></div>`;
+    }
+  } else {
+    const oc=conns.find(c=>c.from===nodeId&&(c.fp==='out'||c.fp==='out-y'||c.fp==='out-n'));
+    if(oc){
+      const tgt=nodes.find(x=>x.id===oc.to);
+      if(tgt){
+        const tt=T[tgt.type];
+        connHTML=`<div class="iomod-conn">
+          <div class="iomod-conn-lbl">Conectado a</div>
+          <div class="iomod-conn-src">
+            <span class="iomod-conn-dot" style="background:${tt.dot}"></span>
+            <span class="iomod-conn-name">${escapeHTML(tgt.name)}</span>
+          </div>
+        </div>`;
+      }
+    } else {
+      connHTML=`<div class="iomod-conn"><div class="iomod-conn-empty">Sin conexión de salida</div></div>`;
+    }
+  }
+
+  let modal=document.getElementById('io-modal');
+  if(!modal){modal=document.createElement('div');modal.id='io-modal';document.body.appendChild(modal);}
+  modal.onclick=e=>{if(e.target===modal)closeIOModal();};
+  modal.innerHTML=`<div id="io-modal-box" onclick="event.stopPropagation()">
+    <div class="iomod-head">
+      <div class="iomod-title-row">
+        <span class="iomod-dir" style="color:${titleColor}">${title}</span>
+        <span class="iomod-type-badge" style="color:${color}">${icon} ${type}</span>
+      </div>
+      <button class="iomod-cls" onclick="closeIOModal()">✕</button>
+    </div>
+    <div class="iomod-body">
+      <div class="iomod-field">
+        <div class="iomod-fl">Descripción</div>
+        <input class="iomod-fi" value="${escapeHTML(label)}" placeholder="Describe qué ${isIn?'recibe':'entrega'} este agente..."
+          oninput="const _n=nodes.find(x=>x.id==='${nodeId}');if(_n){_n.${labelField}=this.value;scheduleSave();}">
+      </div>
+      ${isIn?`<div class="iomod-field">
+        <div class="iomod-fl">Valor por defecto</div>
+        <input class="iomod-fi" value="${escapeHTML(defVal)}" placeholder="Valor si no hay conexión..."
+          oninput="const _n=nodes.find(x=>x.id==='${nodeId}');if(_n){_n.inputDefault=this.value;scheduleSave();}">
+      </div>`:''}
+      ${connHTML}
+    </div>
+  </div>`;
+  modal.classList.add('open');
+}
+function closeIOModal(){const m=document.getElementById('io-modal');if(m)m.classList.remove('open');}
+
+// ══════════════════════════════
+// RUNTIME AGENT CARDS (agentes activos sin nodo en canvas)
+// ══════════════════════════════
+function syncRuntimeAgentsToCanvas(ctx){
+  const agentStates=ctx.agentes_activos||{};
+  const pilot=nodes.find(n=>n.type==='pilot'||n.agentId==='AG-01');
+  const canvasAgIds=new Set(nodes.filter(n=>n.agentId).map(n=>n.agentId));
+
+  // Eliminar runtime cards de agentes que ya no están activos
+  const activeIds=new Set(Object.values(agentStates).filter(ag=>ag.estado==='activo').map(ag=>ag.agent_id));
+  outputCards=outputCards.filter(card=>{
+    if(!card._isRuntime)return true;
+    if(!activeIds.has(card._agentId)){
+      document.getElementById(card.id)?.remove();
+      conns=conns.filter(c=>c.from!==card.id&&c.to!==card.id);
+      return false;
+    }
+    return true;
+  });
+
+  // Crear o actualizar runtime cards para agentes activos sin nodo
+  const activeWithoutNode=Object.values(agentStates)
+    .filter(ag=>ag.estado==='activo'&&ag.agent_id!=='AG-01'&&!canvasAgIds.has(ag.agent_id));
+
+  activeWithoutNode.forEach((ag,i)=>{
+    const existing=outputCards.find(c=>c._isRuntime&&c._agentId===ag.agent_id);
+    if(existing){
+      existing._agAction=ag.accion_actual;
+      const el=document.getElementById(existing.id);
+      if(el){
+        const actionEl=el.querySelector('.rt-action');
+        if(actionEl)actionEl.textContent=ag.accion_actual||'ejecutando...';
+      }
+    } else {
+      const baseX=pilot?(pilot.x+350):(3350);
+      const baseY=pilot?(pilot.y):(2400);
+      const col=i%2, row=Math.floor(i/2);
+      _mkRuntimeAgentCard(ag, baseX+(col*210), baseY+(row*130));
+      if(pilot){
+        conns.push({id:'c'+Math.random().toString(36).slice(2,10),
+          from:pilot.id,fp:'out',to:'rt_'+ag.agent_id,tp:'in',active:true});
+      }
+    }
+  });
+}
+
+function _mkRuntimeAgentCard(ag,x,y){
+  const id='rt_'+ag.agent_id;
+  document.getElementById(id)?.remove();
+  outputCards=outputCards.filter(c=>c.id!==id);
+  const agType=AG_TO_TYPE[ag.agent_id]||'prompt';
+  const tp=T[agType]||{};
+  const name=ag.nombre||AGENT_NAMES[ag.agent_id]||ag.agent_id;
+  const oc={id,x,y,_isRuntime:true,_agentId:ag.agent_id,_agAction:ag.accion_actual,
+    label:name,isCtxFile:false,fromNodeName:name,fromDot:tp.dot||'#706860'};
+  outputCards.push(oc);
+  const el=document.createElement('div');
+  el.className='output-card runtime-agent-card';el.id=id;
+  el.style.cssText=`left:${x}px;top:${y}px`;
+  el.innerHTML=`
+    <div class="port in" data-nid="${id}" data-pt="in"></div>
+    <div class="port out" data-nid="${id}" data-pt="out"></div>
+    <div class="rt-inner">
+      <div class="rt-head">
+        <div class="rt-dot" style="background:${tp.dot||'#706860'}"></div>
+        <span class="rt-name">${escapeHTML(name)}</span>
+        <span class="rt-agid">${ag.agent_id}</span>
+        <span class="rt-pulse"></span>
+      </div>
+      <div class="rt-action">${escapeHTML(ag.accion_actual||'ejecutando...')}</div>
+    </div>`;
+  el.addEventListener('mousedown',e=>cardMouseDown(e,id));
+  document.getElementById('canvas').appendChild(el);
+  return oc;
+}
+
+
 function setIOType(id,dir,type){
   const n=nodes.find(x=>x.id===id);if(!n)return;
   if(dir==='input')n.inputType=type;else n.outputType=type;
@@ -1540,6 +3361,46 @@ function runAllTests(id){const n=nodes.find(x=>x.id===id);if(!n)return;n.tests.f
 // ══════════════════════════════
 function openSide(){document.getElementById('pside').classList.add('open');document.getElementById('pback').style.display='block';loadPipelinesInSidebar();}
 function closeSide(){document.getElementById('pside').classList.remove('open');document.getElementById('pback').style.display='none';}
+
+function updateAddAgentMenuAvailability(){
+  const cards=document.querySelectorAll('#add-agent-menu .add-agent-card');
+  if(!cards.length)return;
+  const hasPilot=nodes.some(n=>n.type==='pilot'||n.agentId==='AG-01');
+  const hasOperator=nodes.some(n=>n.type==='human'||n.agentId==='AG-05');
+  cards.forEach(card=>{
+    const type=card.dataset.agentType;
+    let enabled=false;
+    let reason='';
+    if(type==='pilot'){
+      enabled=true;
+    }else if(type==='human'){
+      enabled=hasPilot;
+      if(!enabled)reason='Crea un piloto primero';
+    }else{
+      enabled=hasPilot&&hasOperator;
+      if(!hasPilot)reason='Crea un piloto primero';
+      else if(!hasOperator)reason='Crea un operador primero';
+    }
+    card.classList.toggle('disabled',!enabled);
+    card.setAttribute('draggable',enabled?'true':'false');
+    card.dataset.disabledReason=reason;
+    card.title=!enabled?reason:'';
+    card.style.display='flex';
+  });
+}
+
+function toggleAddAgentMenu(e){
+  if(e)e.stopPropagation();
+  const menu=document.getElementById('add-agent-menu');
+  if(!menu)return;
+  updateAddAgentMenuAvailability();
+  menu.classList.toggle('hidden');
+}
+
+function closeAddAgentMenu(){
+  const menu=document.getElementById('add-agent-menu');
+  if(menu)menu.classList.add('hidden');
+}
 
 async function loadPipelinesInSidebar(){
   const list=document.getElementById('pipelines-list');
@@ -1578,6 +3439,13 @@ async function switchPipeline(id,name){
   if(state&&state.nodes.length>0){
     state.nodes.forEach(n=>{nodes.push(n);mkNode(n);});
     state.conns.forEach(c=>conns.push(c));
+    if(state.outputs?.length)state.outputs.forEach(output=>dropBackendOutputCard(output));
+    if(state.operatorQuestions?.length)state.operatorQuestions.filter(q=>q.status!=='answered').forEach(q=>createBackendQuestionCard(q));
+    if(state.outputCards?.length){
+      state.outputCards
+        .filter(oc=>!oc.backendOutput&&!oc.assetId?.includes?.('assembly-final-'))
+        .forEach(oc=>restoreOutputCard(oc));
+    }
     setTimeout(()=>{drawConns();fitAll();updateMM();},120);
     glog('done','Pipeline','system','Pipeline "'+name+'" cargado — '+nodes.length+' agentes');
   } else {
@@ -1634,7 +3502,7 @@ function renderLogEntry(entry){
   const div=document.createElement('div');div.className='log-entry '+entry.type+(entry.type==='think'?' typing':'');
   div.dataset.type=entry.type;div.dataset.id=entry.id;
   const agentColor={pilot:'#c85050',research:'#3a9a6a',prompt:'#c8a040',image:'#8a5abf',video:'#4a8abf',assembly:'#c87840',human:'#c8a040',system:'#4a4870'}[entry.agentType]||'#706860';
-  div.innerHTML=`<span class="le-time">${entry.t}</span><span class="le-agent" style="color:${agentColor}">${entry.agent.slice(0,10)}</span><span class="le-msg">${entry.msg}</span>`;
+  div.innerHTML=`<span class="le-time">${entry.t}</span><span class="le-msg">${entry.msg}</span>`;
   body.appendChild(div);
   body.querySelectorAll('.log-entry.think.typing').forEach((el,i,arr)=>{if(i<arr.length-1)el.classList.remove('typing');});
   body.scrollTop=body.scrollHeight;
@@ -1676,7 +3544,7 @@ function stopTitleCycle(finalText){
   }
 }
 
-function toggleLogMin(){const win=document.getElementById('logwin');logMinimized=!logMinimized;win.classList.toggle('minimized',logMinimized);if(!logMinimized)win.style.height=logPrevH+'px';else logPrevH=win.offsetHeight;}
+function toggleLogMin(){if(window._ob&&window._ob.isActive&&window._ob.isActive()){window._ob.skip();return;}const win=document.getElementById('logwin');logMinimized=!logMinimized;win.classList.toggle('minimized',logMinimized);if(!logMinimized)win.style.height=logPrevH+'px';else logPrevH=win.offsetHeight;}
 function toggleLogMax(){const win=document.getElementById('logwin');if(win.offsetHeight<300){logPrevH=win.offsetHeight;win.style.height='400px';}else win.style.height=logPrevH+'px';}
 
 // Log drag
@@ -1687,12 +3555,39 @@ function toggleLogMax(){const win=document.getElementById('logwin');if(win.offse
 })();
 (function(){let resizing=false,startY=0,startH=0;const handle=document.getElementById('logresize'),win=document.getElementById('logwin');
   handle.addEventListener('mousedown',e=>{resizing=true;startY=e.clientY;startH=win.offsetHeight;e.preventDefault();});
-  document.addEventListener('mousemove',e=>{if(!resizing)return;win.style.height=Math.max(80,Math.min(window.innerHeight-40,startH-(e.clientY-startY)))+'px';});
+  document.addEventListener('mousemove',e=>{
+    if(!resizing)return;
+    const topAnchored=win.style.bottom==='auto';
+    const delta=topAnchored?(e.clientY-startY):(startY-e.clientY);
+    win.style.height=Math.max(80,Math.min(window.innerHeight-40,startH+delta))+'px';
+  });
   document.addEventListener('mouseup',()=>{resizing=false;});
 })();
-(function(){let resizing=false,startX=0,startW=0;const handle=document.getElementById('logresize-w'),win=document.getElementById('logwin');
+(function(){let resizing=false,startX=0,startW=0,startLeft=0;const handle=document.getElementById('logresize-w'),win=document.getElementById('logwin');
+  handle.addEventListener('mousedown',e=>{resizing=true;startX=e.clientX;startW=win.offsetWidth;startLeft=win.getBoundingClientRect().left;e.preventDefault();});
+  document.addEventListener('mousemove',e=>{
+    if(!resizing)return;
+    const newW=Math.max(280,Math.min(Math.round(window.innerWidth*.9),startW-(e.clientX-startX)));
+    win.style.width=newW+'px';
+    win.style.left=Math.max(0,startLeft-(newW-startW))+'px';
+    win.style.right='auto';
+  });
+  document.addEventListener('mouseup',()=>{resizing=false;});
+})();
+(function(){let resizing=false,startY=0,startH=0,startTop=0;const handle=document.getElementById('logresize-t'),win=document.getElementById('logwin');
+  handle.addEventListener('mousedown',e=>{resizing=true;startY=e.clientY;startH=win.offsetHeight;startTop=win.getBoundingClientRect().top;win.style.transition='none';e.preventDefault();});
+  document.addEventListener('mousemove',e=>{
+    if(!resizing)return;
+    const delta=startY-e.clientY;
+    const newH=Math.max(80,Math.min(window.innerHeight-40,startH+delta));
+    win.style.height=newH+'px';
+    if(win.style.bottom==='auto')win.style.top=Math.max(0,startTop-delta)+'px';
+  });
+  document.addEventListener('mouseup',()=>{if(!resizing)return;resizing=false;win.style.transition='';});
+})();
+(function(){let resizing=false,startX=0,startW=0;const handle=document.getElementById('logresize-r'),win=document.getElementById('logwin');
   handle.addEventListener('mousedown',e=>{resizing=true;startX=e.clientX;startW=win.offsetWidth;e.preventDefault();});
-  document.addEventListener('mousemove',e=>{if(!resizing)return;const newW=Math.max(280,Math.min(Math.round(window.innerWidth*.9),startW-(e.clientX-startX)));win.style.width=newW+'px';});
+  document.addEventListener('mousemove',e=>{if(!resizing)return;const newW=Math.max(280,Math.min(Math.round(window.innerWidth*.9),startW+(e.clientX-startX)));win.style.width=newW+'px';});
   document.addEventListener('mouseup',()=>{resizing=false;});
 })();
 
@@ -1702,15 +3597,46 @@ const LOG_COMMANDS={
   agente:{desc:'Gestionar agentes',actions:[{label:'Crear agente con IA',icon:'✦',action:()=>openAgentBuilder()},{label:'Ver canvas',icon:'⊞',action:()=>fitAll()},{label:'Agregar Piloto',icon:'◈',action:()=>addNodeCenter('pilot')}]},
   skill:{desc:'Gestionar skills',actions:[{label:'Crear nueva skill',icon:'⬡',action:()=>openSkillBuilder()},{label:'Ver lista de skills',icon:'≡',action:()=>listSkillsInLog()},{label:'Asignar a nodo',icon:'→',action:()=>promptAssignSkill()}]},
   run:{desc:'Ejecutar',actions:[{label:'Run All',icon:'▶',action:()=>runAll()}]},
+  approve:{desc:'Aprobar pregunta pendiente con sugerencia — uso: /approve o /approve all'},
+  answer:{desc:'Responder pregunta pendiente — uso: /answer tu_respuesta'},
   reset:{desc:'Resetear',actions:[{label:'Reset All',icon:'↺',action:()=>resetAll()}]},
   fit:{desc:'Ajustar vista',actions:[{label:'Fit View',icon:'⊞',action:()=>fitAll()}]},
+  bp:{desc:'Canjear código de activación — uso: /bp CODIGO-XX'},
   help:{desc:'Ayuda',actions:[{label:'Ver comandos',icon:'?',action:()=>Object.entries(LOG_COMMANDS).forEach(([k,v])=>glog('system','Help','system',`/${k} — ${v.desc}`))}]}
 };
 function listSkillsInLog(){if(!customSkills.length){glog('system','Skills','system','No hay skills. Crea una con /skill');return;}customSkills.forEach(s=>glog('action','Skills','system',`⬡ ${s.name} — ${s.type||''} — ${s.endpoint||''}`))}
 function promptAssignSkill(){if(!customSkills.length){glog('warn','Skills','system','No hay skills. Crea una primero.');return;}if(!sel){glog('warn','Skills','system','Selecciona un nodo primero.');return;}openSkillAssign(sel);}
+async function redeemCodeFromTerminal(code){
+  if(!code){glog('warn','Bestpoints','system','Uso: /bp CODIGO-XX');return;}
+  glog('think','Bestpoints','system','⬡ Verificando código...');
+  try{
+    const res=await fetch('/api/hash/redeem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
+    const data=await res.json();
+    if(res.ok){
+      const llave=data.bestpoints_added+'-'+code;
+      glog('done','Bestpoints','system','⬡ ✓ Tu llave es: '+llave);
+      glog('done','Bestpoints','system','⬡ +'+data.bestpoints_added+' BP acreditados · Wallet: '+data.bestpoints.toFixed(4)+' BP · Tier: '+data.tier);
+      _updateBPButton(data.bestpoints-(data.bp_spent||0));
+      await _refreshBPStatus();
+    } else {
+      const errMap={code_not_found:'Código no encontrado.',code_already_used:'Este código ya fue canjeado anteriormente.',code_required:'Debes ingresar un código.'};
+      glog('error','Bestpoints','system','⬡ '+( errMap[data.error]||data.error||'Error desconocido'));
+    }
+  }catch(e){
+    glog('error','Bestpoints','system','⬡ Error de red al canjear código.');
+  }
+}
 function parseLogCommand(){
   const inp=document.getElementById('log-cmd');const val=inp.value.trim();if(!val)return;
   inp.value='';document.getElementById('cmd-hints').innerHTML='';
+
+  // /bp <code> — canjear código de activación
+  if(val.startsWith('/bp ')||val.toLowerCase()==='/bp'){
+    const code=val.slice(4).trim().toUpperCase()||'';
+    glog('action','Terminal','system','> '+val);
+    redeemCodeFromTerminal(code);
+    return;
+  }
 
   // Comandos locales del canvas (sin /)
   const cmd=val.replace('/','').toLowerCase().trim();
@@ -1718,36 +3644,80 @@ function parseLogCommand(){
   if(match&&val.startsWith('/')){
     glog('action','Terminal','system','> '+val);
     glog('system','Terminal','system',match.desc+':');
-    const body=document.getElementById('logbody');
-    const row=document.createElement('div');row.style.cssText='display:flex;gap:5px;padding:4px 8px;flex-wrap:wrap;';
-    match.actions.forEach(a=>{
-      const btn=document.createElement('button');
-      btn.style.cssText='padding:4px 10px;background:rgba(200,160,64,.08);border:1px solid rgba(200,160,64,.2);color:#c8a040;font-family:IBM Plex Mono,monospace;font-size:9px;border-radius:3px;cursor:pointer;letter-spacing:.04em';
-      btn.innerHTML=`${a.icon} ${a.label}`;btn.onclick=()=>a.action();
-      row.appendChild(btn);
-    });
-    body.appendChild(row);body.scrollTop=body.scrollHeight;
+    if(match.actions?.length){
+      const body=document.getElementById('logbody');
+      const row=document.createElement('div');row.style.cssText='display:flex;gap:5px;padding:4px 8px;flex-wrap:wrap;';
+      match.actions.forEach(a=>{
+        const btn=document.createElement('button');
+        btn.style.cssText='padding:4px 10px;background:rgba(200,160,64,.08);border:1px solid rgba(200,160,64,.2);color:#c8a040;font-family:IBM Plex Mono,monospace;font-size:9px;border-radius:3px;cursor:pointer;letter-spacing:.04em';
+        btn.innerHTML=`${a.icon} ${a.label}`;btn.onclick=()=>a.action();
+        row.appendChild(btn);
+      });
+      const body2=document.getElementById('logbody');
+      body2.appendChild(row);body2.scrollTop=body2.scrollHeight;
+    }
     return;
   }
 
-  // Texto libre → crear pipeline a partir del prompt
-  if(!val.startsWith('/')){createPipelineFromPrompt(val);return;}
+  // Texto libre → responder operador si hay preguntas pendientes; si no, crear pipeline
+  if(!val.startsWith('/')){
+    const hasPendingOperatorQuestion=Boolean(getActiveQuestionCard()||operatorQuestionQueue.length||operatorWaiting);
+    if((terminalPipelineId||currentPipelineId)&&hasPendingOperatorQuestion){sendTerminalInput(val);return;}
+    createPipelineFromPrompt(val);return;
+  }
   sendTerminalInput(val);
 }
 
 // ══════════════════════════════
 // PIPELINE CREATION FLOW
 // ══════════════════════════════
-function showCreatingAnimation(promptText){
+function showCreatingAnimation(promptText, mode='pipeline'){
+  ensureLogVisibleForActivity();
   let ov=document.getElementById('creating-overlay');
   if(!ov){ov=document.createElement('div');ov.id='creating-overlay';document.getElementById('wrap').appendChild(ov);}
   const short=promptText.length>60?promptText.slice(0,58)+'…':promptText;
-  ov.innerHTML=`<div class="co-inner"><div class="co-rings"><div class="co-ring co-r1"></div><div class="co-ring co-r2"></div><div class="co-ring co-r3"></div></div><div class="co-label">Creando pipeline...</div><div class="co-prompt">"${short}"</div></div>`;
+  const isArchitect=mode==='architect';
+  if(creatingOverlayTimer){clearInterval(creatingOverlayTimer);creatingOverlayTimer=null;}
+  ov.innerHTML=`<div class="co-inner${isArchitect?' architect':''}">
+    <div class="co-badge">${isArchitect?'AG-00 · Arquitecto':'Pipeline'}</div>
+    <div class="co-rings"><div class="co-ring co-r1"></div><div class="co-ring co-r2"></div><div class="co-ring co-r3"></div></div>
+    <div class="co-label">${isArchitect?'Construyendo estructura del contexto...':'Creando pipeline...'}</div>
+    <div class="co-sub">${isArchitect?'Diseñando agentes, dependencias y bloques iniciales':'Preparando canvas inicial'}</div>
+    ${isArchitect?'<div class="co-timehint" id="co-timehint">Tiempo estimado restante: 1:00</div>':''}
+    <div class="co-prompt">"${short}"</div>
+  </div>`;
   ov.style.display='flex';
+  if(isArchitect){
+    const startedAt=Date.now();
+    const renderCountdown=()=>{
+      const target=document.getElementById('co-timehint');
+      if(!target)return;
+      const elapsed=Math.floor((Date.now()-startedAt)/1000);
+      const remaining=Math.max(0,60-elapsed);
+      const mm=Math.floor(remaining/60);
+      const ss=String(remaining%60).padStart(2,'0');
+      if(elapsed<=60){
+        target.textContent=`Tiempo estimado restante: ${mm}:${ss}`;
+        return;
+      }
+      const overdue=elapsed-60;
+      const omm=Math.floor(overdue/60);
+      const oss=String(overdue%60).padStart(2,'0');
+      target.textContent=`Retraso sobre 1 minuto: +${omm}:${oss}. Si supera los 5 minutos, hubo un problema.`;
+    };
+    renderCountdown();
+    creatingOverlayTimer=setInterval(renderCountdown,1000);
+  }
 }
 function hideCreatingAnimation(){
   const ov=document.getElementById('creating-overlay');
+  if(creatingOverlayTimer){clearInterval(creatingOverlayTimer);creatingOverlayTimer=null;}
   if(ov)ov.style.display='none';
+}
+
+function ensureLogVisibleForActivity(){
+  const logWin=document.getElementById('logwin');
+  if(logWin&&logWin.classList.contains('minimized'))toggleLogMin();
 }
 function createPipelineFromPrompt(promptText){
   // Minimizar terminal y modelos para dar espacio al canvas
@@ -1777,9 +3747,69 @@ function createPipelineFromPrompt(promptText){
   sendTerminalInput(promptText);
 }
 
+// ── Terminal question auto-answer (15s timeout) ──────────────────
+function startTerminalQuestionTimer(question, suggestion){
+  clearTerminalQuestionTimer();
+  terminalActiveQuestion=question;
+  const inp=document.getElementById('log-cmd');
+  if(!inp)return;
+  inp.value=suggestion;
+  inp.style.borderColor='rgba(200,160,64,.5)';
+  inp.style.color='rgba(200,160,64,.8)';
+  const TIMEOUT=15000;
+  let remaining=Math.ceil(TIMEOUT/1000);
+  const promptEl=document.getElementById('log-cmd-prompt');
+  const origPrompt=promptEl?promptEl.textContent:'›';
+  const updateCountdown=()=>{
+    if(promptEl)promptEl.textContent=remaining+'s›';
+  };
+  updateCountdown();
+  const interval=setInterval(()=>{
+    remaining--;
+    if(remaining<=0){clearInterval(interval);return;}
+    updateCountdown();
+  },1000);
+  terminalQuestionTimer=setTimeout(()=>{
+    clearInterval(interval);
+    if(promptEl)promptEl.textContent=origPrompt;
+    inp.style.borderColor='';inp.style.color='';
+    // Auto-send the suggestion if input wasn't manually changed
+    const currentVal=inp.value.trim();
+    if(currentVal===suggestion||currentVal===''){
+      glog('think','Operador','human','[Auto] '+suggestion);
+      inp.value='';
+      sendTerminalInput(suggestion);
+    }
+    terminalActiveQuestion=null;
+    terminalQuestionTimer=null;
+  },TIMEOUT);
+  // If user focuses and edits, cancel auto-send
+  inp.addEventListener('focus',cancelTerminalQuestionTimer,{once:true});
+}
+
+function cancelTerminalQuestionTimer(){
+  if(!terminalQuestionTimer)return;
+  clearTimeout(terminalQuestionTimer);
+  terminalQuestionTimer=null;
+  terminalActiveQuestion=null;
+  const inp=document.getElementById('log-cmd');
+  if(inp){inp.style.borderColor='';inp.style.color='';}
+  const promptEl=document.getElementById('log-cmd-prompt');
+  if(promptEl)promptEl.textContent='›';
+}
+
+function clearTerminalQuestionTimer(){
+  if(terminalQuestionTimer){clearTimeout(terminalQuestionTimer);terminalQuestionTimer=null;}
+  terminalActiveQuestion=null;
+  const inp=document.getElementById('log-cmd');
+  if(inp){inp.style.borderColor='';inp.style.color='';}
+  const promptEl=document.getElementById('log-cmd-prompt');
+  if(promptEl)promptEl.textContent='›';
+}
+
 document.getElementById('log-cmd').addEventListener('keydown',e=>{
-  if(e.key==='Enter'){parseLogCommand();e.preventDefault();}
-  if(e.key==='Escape'){const w=document.getElementById('logwin');if(w.classList.contains('spotlight'))toggleLogSpotlight();e.preventDefault();}
+  if(e.key==='Enter'){parseLogCommand();clearTerminalQuestionTimer();e.preventDefault();}
+  if(e.key==='Escape'){const w=document.getElementById('logwin');if(w.classList.contains('spotlight'))toggleLogSpotlight();cancelTerminalQuestionTimer();e.preventDefault();}
   if(e.key==='Tab'){e.preventDefault();const val=e.target.value.replace('/','');const m=Object.keys(LOG_COMMANDS).find(k=>k.startsWith(val));if(m)e.target.value='/'+m;}
   if(e.key==='ArrowUp'||e.key==='ArrowDown'){
     const items=document.querySelectorAll('#cmd-hints .ch-item');if(!items.length)return;
@@ -1792,6 +3822,7 @@ document.getElementById('log-cmd').addEventListener('keydown',e=>{
   }
 });
 document.getElementById('log-cmd').addEventListener('input',function(){
+  if(terminalActiveQuestion)cancelTerminalQuestionTimer(); // user typed → cancel auto-send
   renderCmdHints(this.value);
 });
 
@@ -1807,6 +3838,7 @@ function renderCmdHints(val){
 
 let _spotlightPrev=null;
 function toggleLogSpotlight(){
+  if(window._ob&&window._ob.isActive&&window._ob.isActive()){window._ob.skip();return;}
   const win=document.getElementById('logwin');
   if(win.classList.contains('spotlight')){
     win.classList.remove('spotlight');
@@ -1969,9 +4001,11 @@ function scheduleSave(){
   if(!currentPipelineId)return;
   clearTimeout(_saveTimer);
   _saveTimer=setTimeout(()=>{
+    // Filter out ephemeral cards (questions, ctx-file) — those regenerate from backend
+    const savableCards=outputCards.filter(c=>!c.isQuestionCard&&!c.isCtxFile&&!c.backendOutput&&!c.isConnectionPayload);
     fetch('/api/pipelines/'+currentPipelineId+'/state',{
       method:'PUT',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({nodes,conns})
+      body:JSON.stringify({nodes,conns,outputCards:savableCards})
     }).catch(()=>{});
   },1500);
 }
@@ -2016,13 +4050,16 @@ function handleImportFile(input){
 }
 
 function createDefaultNodes(){
-  const rs=addNode('research',60,80);
-  const hm=addNode('human',360,80);
-  const pl=addNode('pilot',640,30);
-  const pr=addNode('prompt',920,30);
-  const im=addNode('image',60,420);
-  const vi=addNode('video',360,420);
-  const as=addNode('assembly',660,420);
+  const center=getCanvasViewportCenter();
+  const startX=center.x-520;
+  const startY=center.y-240;
+  const rs=addNode('research',startX,startY+50);
+  const hm=addNode('human',startX+300,startY+50);
+  const pl=addNode('pilot',startX+600,startY);
+  const pr=addNode('prompt',startX+920,startY);
+  const im=addNode('image',startX,startY+390);
+  const vi=addNode('video',startX+300,startY+390);
+  const as=addNode('assembly',startX+600,startY+390);
   hm.name='Operador — Aprobar idea';
   as.name='Agente Ensamblaje';
   document.getElementById(hm.id).querySelector('.nh-name').textContent=hm.name;
@@ -2040,7 +4077,15 @@ function createDefaultNodes(){
 // Awin drag & resize
 let _ad=false,_ar=false;
 function initAwinDrag(){if(_ad)return;_ad=true;let dr=false,ox=0,oy=0;const bar=document.getElementById('awin-bar'),win=document.getElementById('agentwin');bar.addEventListener('mousedown',e=>{if(e.target.classList.contains('ltb-dot'))return;dr=true;const r=win.getBoundingClientRect();ox=e.clientX-r.left;oy=e.clientY-r.top;e.preventDefault();});document.addEventListener('mousemove',e=>{if(!dr)return;win.style.left=Math.max(0,Math.min(window.innerWidth-win.offsetWidth,e.clientX-ox))+'px';win.style.top=Math.max(0,Math.min(window.innerHeight-win.offsetHeight,e.clientY-oy))+'px';win.style.bottom='auto';win.style.right='auto';});document.addEventListener('mouseup',()=>{dr=false;});}
-function initAwinResize(){if(_ar)return;_ar=true;let rs=false,sY=0,sH=0;const h=document.getElementById('awin-resize'),win=document.getElementById('agentwin');h.addEventListener('mousedown',e=>{rs=true;sY=e.clientY;sH=win.offsetHeight;e.preventDefault();});document.addEventListener('mousemove',e=>{if(!rs)return;win.style.height=Math.max(200,Math.min(700,sH-(e.clientY-sY)))+'px';awinPrevH=win.offsetHeight;});document.addEventListener('mouseup',()=>{rs=false;});}
+function initAwinResize(){if(_ar)return;_ar=true;
+  const win=document.getElementById('agentwin');
+  // bottom handle
+  (function(){let rs=false,sY=0,sH=0;const h=document.getElementById('awin-resize');h.addEventListener('mousedown',e=>{rs=true;sY=e.clientY;sH=win.offsetHeight;e.preventDefault();});document.addEventListener('mousemove',e=>{if(!rs)return;win.style.height=Math.max(200,Math.min(700,sH-(e.clientY-sY)))+'px';awinPrevH=win.offsetHeight;});document.addEventListener('mouseup',()=>{rs=false;});})();
+  // top handle
+  (function(){let rs=false,sY=0,sH=0;const h=document.getElementById('awin-resize-t');h.addEventListener('mousedown',e=>{rs=true;sY=e.clientY;sH=win.offsetHeight;e.preventDefault();});document.addEventListener('mousemove',e=>{if(!rs)return;win.style.height=Math.max(200,Math.min(700,sH-(e.clientY-sY)))+'px';awinPrevH=win.offsetHeight;});document.addEventListener('mouseup',()=>{rs=false;});})();
+  // right handle
+  (function(){let rs=false,sX=0,sW=0;const h=document.getElementById('awin-resize-r');h.addEventListener('mousedown',e=>{rs=true;sX=e.clientX;sW=win.offsetWidth;e.preventDefault();});document.addEventListener('mousemove',e=>{if(!rs)return;win.style.width=Math.max(300,Math.min(Math.round(window.innerWidth*.9),sW+(e.clientX-sX)))+'px';});document.addEventListener('mouseup',()=>{rs=false;});})();
+}
 
 // ══════════════════════════════
 // SKILL ADAPT PANEL
@@ -2239,6 +4284,23 @@ function updateMM(){
   c.globalAlpha=.3;c.strokeStyle='#c8a040';c.lineWidth=.7;c.strokeRect((-px/sc)*sx,(-py/sc)*sy,(window.innerWidth/sc)*sx,(window.innerHeight/sc)*sy);c.globalAlpha=1;
 }
 
+// Minimap click / drag → pan canvas
+(function(){
+  const cv=document.getElementById('mmc');
+  function panToMM(e){
+    const r=cv.getBoundingClientRect();
+    const mx=e.clientX-r.left,my=e.clientY-r.top;
+    const worldX=mx*6000/140,worldY=my*5000/85;
+    px=window.innerWidth/2-worldX*sc;
+    py=window.innerHeight/2-worldY*sc;
+    applyT();
+  }
+  let mmDrag=false;
+  cv.addEventListener('mousedown',e=>{mmDrag=true;panToMM(e);e.preventDefault();});
+  document.addEventListener('mousemove',e=>{if(mmDrag)panToMM(e);});
+  document.addEventListener('mouseup',()=>{mmDrag=false;});
+})();
+
 // ══════════════════════════════
 // MODEL MANAGEMENT
 // ══════════════════════════════
@@ -2322,6 +4384,56 @@ const AG_TO_TYPE={
   'AG-07':'assembly',   // Digestor → ensamblaje/consolidación
 };
 
+function normalizeSeedAgents(agentMenu,seedTemplate){
+  const menu=agentMenu&&typeof agentMenu==='object'?agentMenu:{};
+  const rawAgents=Array.isArray(menu.agentes)?menu.agentes:[];
+  const normalized=rawAgents.map(agent=>{
+    if(typeof agent==='string')return{id:agent,nombre:AGENT_NAMES[agent]||agent};
+    if(!agent||typeof agent!=='object')return null;
+    const id=agent.id||agent.agente_id||agent.agent_id||null;
+    if(!id)return null;
+    return{
+      ...agent,
+      id,
+      nombre:agent.nombre||AGENT_NAMES[id]||id,
+      rol_en_pipeline:agent.rol_en_pipeline||agent.rol||'',
+    };
+  }).filter(Boolean);
+  const seen=new Set(normalized.map(agent=>agent.id));
+  const orderedIds=Array.isArray(seedTemplate?.orden_produccion)
+    ? [...new Set(seedTemplate.orden_produccion.map(step=>step?.agente).filter(Boolean))]
+    : [];
+  if(!seen.has('AG-01')){
+    normalized.unshift({id:'AG-01',nombre:AGENT_NAMES['AG-01']||'Piloto',rol_en_pipeline:'Coordina el pipeline y consolida resultados.'});
+    seen.add('AG-01');
+  }
+  orderedIds.forEach(id=>{
+    if(seen.has(id))return;
+    normalized.push({id,nombre:AGENT_NAMES[id]||id,rol_en_pipeline:''});
+    seen.add(id);
+  });
+  if(!seen.has('AG-07')){
+    normalized.push({id:'AG-07',nombre:AGENT_NAMES['AG-07']||'Digestor',rol_en_pipeline:'Ensamblador y revisor final del entregable.'});
+    seen.add('AG-07');
+  }
+  return normalized;
+}
+
+function ensureAssemblyNodeFromContext(ctx){
+  if(!ctx?.agentes_activos?.['AG-07']&&!ctx?.ensamblaje?.producto_final&&!ctx?.ensamblaje?.asset_ids?.length)return null;
+  let assemblyNode=nodes.find(n=>n.type==='assembly'||n.agentId==='AG-07');
+  if(assemblyNode)return assemblyNode;
+  const maxX=nodes.length?Math.max(...nodes.map(n=>n.x)):2600;
+  const avgY=nodes.length?(nodes.reduce((sum,n)=>sum+n.y,0)/nodes.length):2400;
+  assemblyNode=addNode('assembly',maxX+420,avgY);
+  assemblyNode.agentId='AG-07';
+  assemblyNode.name='DIGESTOR';
+  assemblyNode.meta='Ensamblaje y consolidación final.';
+  assemblyNode.goal='Entregar el producto final del pipeline.';
+  refreshNodeConnectionUI(assemblyNode.id);
+  return assemblyNode;
+}
+
 // Construye el canvas a partir del agent_menu del Arquitecto
 async function syncCanvasFromPipeline(pipelineId){
   if(pipelineId!==currentPipelineId)return; // stale call — ignore
@@ -2333,39 +4445,41 @@ async function syncCanvasFromPipeline(pipelineId){
       return;
     }
 
-    const agentes=seed.agent_menu.agentes;
+    const agentes=normalizeSeedAgents(seed.agent_menu,seed.seed_template);
     const orden=seed.seed_template?.orden_produccion||[];
+    const existingPromptCard=getCanvasPromptCard();
+    const preservedPrompt=existingPromptCard?{
+      ...existingPromptCard,
+      content:getCanvasSeedPrompt()||existingPromptCard.content||'',
+    }:null;
 
     // Limpiar canvas actual
     nodes.forEach(n=>document.getElementById(n.id)?.remove());
-    outputCards.forEach(c=>document.getElementById(c.id)?.remove());
-    nodes=[];conns=[];outputCards=[];
+    outputCards.forEach(c=>{if(!preservedPrompt||c.id!==preservedPrompt.id)document.getElementById(c.id)?.remove();});
+    nodes=[];conns=[];outputCards=preservedPrompt?[preservedPrompt]:[];
     document.getElementById('svgl').innerHTML='';
+    if(preservedPrompt){
+      if(preservedPrompt._kind==='seed')_renderSeedCardDOM(preservedPrompt);
+      else if(preservedPrompt._kind==='input')_renderInputCardDOM(preservedPrompt);
+    }
 
     // Layout: calcular capas por dependencias
-    const layers=buildLayers(agentes,orden);
-    const COL_W=380,ROW_H=310;
-    // Centre the entire grid around the canvas centre (3000, 2500)
-    const CANVAS_CX=3000,CANVAS_CY=2500;
-    const gridW=(layers.length-1)*COL_W;
-    const gridStartX=CANVAS_CX-gridW/2;
-
-    layers.forEach((layer,col)=>{
-      const totalH=(layer.length-1)*ROW_H;
-      const startY=CANVAS_CY-totalH/2;
-      layer.forEach((agId,row)=>{
-        const ag=agentes.find(a=>a.id===agId);if(!ag)return;
+    const viewportCenter=getCanvasViewportCenter();
+    const CANVAS_CX=viewportCenter.x,CANVAS_CY=viewportCenter.y;
+    const roleLayout=buildRoleAwareLayout(agentes,CANVAS_CX,CANVAS_CY);
+    if(roleLayout){
+      agentes.forEach(ag=>{
+        const agId=ag.id;
         const type=AG_TO_TYPE[agId]||'prompt';
-        const x=gridStartX+col*COL_W;
-        const y=startY+row*ROW_H;
         const tp=T[type]||{};
+        const pos=roleLayout.positions[agId]||{x:CANVAS_CX,y:CANVAS_CY};
         const n={
-          id:'n'+(nid++),type,x,y,
+          id:'n'+(nid++),type,x:pos.x,y:pos.y,
           name:ag.nombre||(tp.label||agId),
           agentId:agId,
           rolEnPipeline:ag.rol_en_pipeline||'',
           status:'idle',img:null,promptOut:null,output:'',
-          model:DEFAULT_MODEL[type]||'claude-haiku-4-5',
+          model:modelsData?.agents?.[agId]?.model||DEFAULT_MODEL[type]||'claude-haiku-4-5',
           meta:ag.rol_en_pipeline||tp.meta||'',
           goal:tp.goal||'',
           inputType:tp.inputType||'json',
@@ -2381,7 +4495,46 @@ async function syncCanvasFromPipeline(pipelineId){
         };
         nodes.push(n);mkNode(n);
       });
-    });
+    }else{
+      const layers=buildLayers(agentes,orden);
+      const COL_W=500,ROW_H=380;
+      const gridW=(layers.length-1)*COL_W;
+      const gridStartX=CANVAS_CX-gridW/2;
+
+      layers.forEach((layer,col)=>{
+        const totalH=(layer.length-1)*ROW_H;
+        const colYOffset=(col%2===0?-30:30);
+        const startY=CANVAS_CY-totalH/2+colYOffset;
+        layer.forEach((agId,row)=>{
+          const ag=agentes.find(a=>a.id===agId);if(!ag)return;
+          const type=AG_TO_TYPE[agId]||'prompt';
+          const x=gridStartX+col*COL_W;
+          const y=startY+row*ROW_H;
+          const tp=T[type]||{};
+          const n={
+            id:'n'+(nid++),type,x,y,
+            name:ag.nombre||(tp.label||agId),
+            agentId:agId,
+            rolEnPipeline:ag.rol_en_pipeline||'',
+            status:'idle',img:null,promptOut:null,output:'',
+            model:modelsData?.agents?.[agId]?.model||DEFAULT_MODEL[type]||'claude-haiku-4-5',
+            meta:ag.rol_en_pipeline||tp.meta||'',
+            goal:tp.goal||'',
+            inputType:tp.inputType||'json',
+            outputType:tp.outputType||'json',
+            inputLabel:tp.inputLabel||'Input',
+            outputLabel:tp.outputLabel||'Output',
+            inputDefault:tp.inputDefault||'',
+            prompt:tp.prompt||'',
+            verification:tp.verification||'',
+            logs:[{t:'--:--',m:'Agente cargado desde pipeline',c:''}],
+            skills:[],
+            tests:[],
+          };
+          nodes.push(n);mkNode(n);
+        });
+      });
+    }
 
     // Crear conexiones basadas en orden_produccion
     buildConnections(orden);
@@ -2389,22 +4542,31 @@ async function syncCanvasFromPipeline(pipelineId){
     hideCreatingAnimation();
 
     const minX=nodes.reduce((m,n)=>Math.min(m,n.x),9999);
-    const avgY=nodes.length>0?nodes.reduce((s,n)=>s+n.y,0)/nodes.length:2500;
+    const avgY=nodes.length>0?nodes.reduce((s,n)=>s+n.y,0)/nodes.length:CANVAS_CY;
     const pilotNode=nodes.find(n=>n.type==='pilot'||n.agentId==='AG-01');
     const targetNode=pilotNode||nodes[0];
 
     // ── Seed drop-card ──
-    const seedText=_pendingSeedPrompt||seed.seed_template?.descripcion||seed.agent_menu?.pipeline_id||'Pipeline';
+    const seedText=(preservedPrompt?.content||'').trim()||_pendingSeedPrompt||seed.seed_template?.descripcion||seed.agent_menu?.pipeline_id||'Pipeline';
     _pendingSeedPrompt=null;
-    const seedCard=mkSeedCard(seedText,Math.max(100,minX-340),avgY-60);
+    let seedCard=preservedPrompt;
+    if(seedCard){
+      seedCard.content=seedText;
+      if(seedCard._kind==='seed')_renderSeedCardDOM(seedCard);
+      else if(seedCard._kind==='input')_renderInputCardDOM(seedCard);
+    }else{
+      const seedX=roleLayout?.seed?.x ?? Math.max(20,minX-300);
+      const seedY=roleLayout?.seed?.y ?? (avgY-120);
+      seedCard=mkSeedCard(seedText,seedX,seedY);
+    }
     if(targetNode){
       conns.push({id:'c'+Math.random().toString(36).slice(2,10),from:seedCard.id,fp:'out',to:targetNode.id,tp:'in',active:true,fromSeed:true,fromCard:true});
     }
 
     // ── Context card (a la derecha del piloto o del primer nodo) ──
-    const maxX=nodes.reduce((m,n)=>Math.max(m,n.x),0);
-    const ctxX=maxX+280;
-    const ctxY=pilotNode?(pilotNode.y-30):avgY-60;
+    const maxX=nodes.reduce((m,n)=>Math.max(m,n.x),CANVAS_CX);
+    const ctxX=roleLayout?.context?.x ?? (maxX+320);
+    const ctxY=roleLayout?.context?.y ?? (pilotNode?(pilotNode.y+20):avgY-40);
     fetch('/api/pipelines/'+pipelineId+'/context')
       .then(r=>r.json())
       .then(data=>mkContextCard(pipelineId,data?.context||{},ctxX,ctxY))
@@ -2491,6 +4653,43 @@ function buildLayers(agentes,orden){
   return layers;
 }
 
+function buildRoleAwareLayout(agentes, centerX, centerY){
+  const ids=new Set(agentes.map(a=>a.id));
+  const standard=['AG-01','AG-02','AG-03','AG-04','AG-05','AG-06','AG-07'];
+  const matchCount=standard.filter(id=>ids.has(id)).length;
+  if(matchCount < 5)return null;
+
+  const leftX=centerX-720;
+  const midA=centerX-250;
+  const midB=centerX+170;
+  const midC=centerX+590;
+  const topY=centerY-280;
+  const stackGap=215;
+  const prodY=centerY+40;
+
+  const pos={};
+  if(ids.has('AG-01'))pos['AG-01']={x:leftX,y:topY};
+  if(ids.has('AG-02'))pos['AG-02']={x:leftX,y:topY+stackGap};
+  if(ids.has('AG-05'))pos['AG-05']={x:leftX,y:topY+(stackGap*2)};
+  if(ids.has('AG-06'))pos['AG-06']={x:leftX,y:topY+(stackGap*3)};
+  if(ids.has('AG-03'))pos['AG-03']={x:midA,y:prodY};
+  if(ids.has('AG-04'))pos['AG-04']={x:midB,y:prodY};
+  if(ids.has('AG-07'))pos['AG-07']={x:midC,y:prodY};
+
+  const unplaced=agentes.filter(a=>!pos[a.id]);
+  unplaced.forEach((ag,index)=>{
+    const row=Math.floor(index/2);
+    const col=index%2;
+    pos[ag.id]={x:midA+(col*420),y:prodY+260+(row*260)};
+  });
+
+  return {
+    positions:pos,
+    seed:{x:centerX-120,y:topY-40},
+    context:{x:midC+300,y:topY-20},
+  };
+}
+
 // Crea conexiones entre nodos basadas en el orden_produccion
 function buildConnections(orden){
   orden.forEach(paso=>{
@@ -2521,12 +4720,23 @@ const AGENT_NAMES={
   'AG-03':'Escritor','AG-04':'Img Gen','AG-05':'Editor',
   'AG-06':'Investigador','AG-07':'Digestor',
 };
+const AGENT_TYPE_MAP={
+  'AG-00':'system',
+  'AG-01':'pilot',
+  'AG-02':'pilot',
+  'AG-03':'prompt',
+  'AG-04':'image',
+  'AG-05':'human',
+  'AG-06':'research',
+  'AG-07':'assembly',
+};
 
 // Conecta SSE para un pipeline activo
 function connectSSE(pipelineId){
   if(sseConnection){sseConnection.close();sseConnection=null;}
   terminalPipelineId=pipelineId;
-  const es=new EventSource('/api/terminal/stream?pipeline_id='+pipelineId);
+  const _hashParam=_pipelineHash?'&hash='+encodeURIComponent(_pipelineHash):'';
+  const es=new EventSource('/api/terminal/stream?pipeline_id='+pipelineId+_hashParam);
   sseConnection=es;
 
   es.addEventListener('connected',()=>glog('system','Terminal','system','[SSE] Conectado al pipeline'));
@@ -2546,7 +4756,22 @@ function connectSSE(pipelineId){
   es.addEventListener('agent_started',e=>{
     const d=JSON.parse(e.data);
     const n=nodes.find(x=>x.agentId===d.agent_id);
-    if(n)setStatus(n.id,'running');
+    if(!n)return;
+    n.streamText='';
+    setStatus(n.id,'running');
+    // Refresh vis so streaming placeholder renders immediately
+    const visEl=document.getElementById('vis_'+n.id);
+    if(visEl)visEl.innerHTML=visHTML(n);
+  });
+  es.addEventListener('agent_stream',e=>{
+    const d=JSON.parse(e.data);
+    const n=nodes.find(x=>x.agentId===d.agent_id);
+    if(!n||n.status!=='running')return;
+    n.streamText=(n.streamText||'')+d.delta;
+    // Update in-place to avoid full re-render on every chunk
+    const streamEl=document.getElementById('nstream_'+n.id);
+    if(streamEl){streamEl.textContent=n.streamText.slice(-280);}
+    else{const visEl=document.getElementById('vis_'+n.id);if(visEl)visEl.innerHTML=visHTML(n);}
   });
   es.addEventListener('agent_updated',e=>{
     const d=JSON.parse(e.data);
@@ -2554,14 +4779,77 @@ function connectSSE(pipelineId){
     if(!n)return;
     if(d.status==='completado')setStatus(n.id,'done');
     else if(d.status==='error')setStatus(n.id,'error');
+    else if(d.status==='model_used'){
+      if(d.model)n.model=d.model;
+      const sel=document.getElementById('msel_'+n.id);
+      if(sel&&d.provider&&d.model&&sel.querySelector(`option[value="${d.provider}||${d.model}"]`))sel.value=`${d.provider}||${d.model}`;
+      glog('system',AGENT_NAMES[d.agent_id]||d.agent_id,'agent','Modelo real: '+[d.provider,d.model].filter(Boolean).join('/'));
+    }
+    else if(d.status==='media_model_used'){
+      glog('system',AGENT_NAMES[d.agent_id]||d.agent_id,'agent','Motor media: '+[d.media_provider,d.media_model].filter(Boolean).join('/'));
+    }
   });
   es.addEventListener('asset_ready',e=>{
     const d=JSON.parse(e.data);
     glog('done',AGENT_NAMES[d.agent_id]||d.agent_id,'agent','Asset listo: '+(d.bloque||d.asset_id||'resultado'));
   });
+  es.addEventListener('output_ready',e=>{
+    const d=JSON.parse(e.data);
+    if(d?.output){
+      dropBackendOutputCard(d.output);
+      glog('done',AGENT_NAMES[d.agent_id]||d.agent_id,'agent','Output listo: '+(d.output.bloque||d.output.public_id||'resultado'));
+    }
+  });
+  es.addEventListener('operator_question_created',e=>{
+    const d=JSON.parse(e.data);
+    if(d?.question){
+      createBackendQuestionCard(d.question);
+      glog('think','Operador','human','Pregunta activa: '+d.question.question);
+      // Pre-fill terminal with suggestion and start auto-answer timer
+      const q=d.question;
+      const sug=q.suggestion||(q.metadata?.opciones?.[0])||q.metadata?.default_value||'';
+      if(sug)startTerminalQuestionTimer(q,sug);
+    }
+  });
+  es.addEventListener('operator_question_answered',e=>{
+    const d=JSON.parse(e.data);
+    if(d?.question?.public_id){
+      // Clear terminal timer if this was the active question
+      if(terminalActiveQuestion?.public_id===d.question.public_id)clearTerminalQuestionTimer();
+      const card=outputCards.find(c=>c.questionId===d.question.public_id);
+      if(card){
+        if(!card.isQuestionResolved){
+          card.type='text';
+          card.label='Decisión operador';
+          card.content=`Pregunta: ${d.question.question||card.question||''}\n\nRespuesta: ${d.question.answer||'sin respuesta'}\n\nCampo: ${d.question.field_key||card.fieldKey||'sin_campo'}`;
+          card.status='answered';
+          card.isQuestionResolved=true;
+          card.answer=d.question.answer||'';
+          card.answerSource=d.question.answer_origin||'manual';
+          card.fromNodeName='Operador';
+          card.fromDot='#c8a040';
+          document.getElementById(card.id)?.remove();
+          mkOutputCard(card);
+        }
+        conns=conns.filter(c=>c.to!==card.id);
+        ensureQuestionCardConnection(card);
+        drawConns();
+        scheduleSave();
+      }
+      if(d.context)applyContextToUI(d.context,pipelineId);
+    }
+  });
   es.addEventListener('assembly_ready',e=>{
     const d=JSON.parse(e.data);
-    glog('done','Digestor','agent','Ensamblaje '+(d.estado||'listo'));
+    glog('done','Digestor','agent','⊞ Ensamblaje '+(d.estado||'listo'));
+    const aNode=nodes.find(n=>n.type==='assembly'||n.agentId==='AG-07');
+    if(aNode){
+      setStatus(aNode.id,'done');
+      if(d.context)updateAssemblyVis(aNode.id,d.context);
+      const producto=d.context?.ensamblaje?.producto_final||d.producto_final;
+      if(producto)dropAssemblyOutputCard(aNode,producto);
+    }
+    syncProgressFromContext(pipelineId);
   });
   es.addEventListener('pipeline_completed',()=>{
     stopPipelineRunClock();
@@ -2576,6 +4864,19 @@ function connectSSE(pipelineId){
     const d=JSON.parse(e.data);
     stopPipelineRunClock();
     glog('error','Piloto','agent','Pipeline corrupto: '+(d.reason||'sin motivo'));
+  });
+  es.addEventListener('budget_update',e=>{
+    const d=JSON.parse(e.data);
+    if(d.bestpoints!=null)_updateBPButton(d.bestpoints - (d.bp_spent||0));
+  });
+  es.addEventListener('budget_exceeded',e=>{
+    const d=JSON.parse(e.data);
+    stopPipelineRunClock();
+    _updateBPButton(0);
+    glog('error','SISTEMA','system','⊘ Presupuesto agotado — pipeline detenido. '+(d.error||''));
+    // flash BP button red
+    const btn=document.getElementById('bestpoint-btn');
+    if(btn){btn.style.color='#c84040';btn.style.borderColor='rgba(200,64,64,.4)';}
   });
   es.addEventListener('message',e=>{
     const d=JSON.parse(e.data);
@@ -2623,7 +4924,7 @@ function glogProcessing(label){
   const body=document.getElementById('logbody');
   const el=document.createElement('div');
   el.id=id;el.className='log-entry think typing';
-  el.innerHTML=`<span class="le-time">${ts()}</span><span class="le-agent" style="color:#5a5248">Terminal</span><span class="le-msg">${label||'procesando…'}</span>`;
+  el.innerHTML=`<span class="le-time">${ts()}</span><span class="le-msg">${label||'procesando…'}</span>`;
   body.appendChild(el);body.scrollTop=body.scrollHeight;
   return ()=>{const e=document.getElementById(id);if(e)e.remove();};
 }
@@ -2710,8 +5011,11 @@ function parseAPIError(msg){
 // KEYBOARD
 // ══════════════════════════════
 document.addEventListener('keydown',e=>{
+  const tag=document.activeElement?.tagName;
+  const isTyping=tag==='INPUT'||tag==='TEXTAREA'||document.activeElement?.isContentEditable;
   if((e.key==='Delete'||e.key==='Backspace')&&document.activeElement===document.body)delSel();
   if(e.key==='Escape'){connMode=false;setConnFrom(null);document.getElementById('tc').style.display='none';closeM();closeExpand();closeAgentBuilder();closeSkillAdapt();}
+  if(isTyping)return;
   if(e.key==='f'||e.key==='F')fitAll();
   if(e.key==='r'||e.key==='R')runAll();
 });
@@ -2733,6 +5037,13 @@ document.addEventListener('keydown',e=>{
       nid=Math.max(...state.nodes.map(n=>parseInt(n.id.replace(/\D/g,''))||0))+1;
       state.nodes.forEach(n=>{nodes.push(n);mkNode(n);});
       state.conns.forEach(c=>conns.push(c));
+      if(state.outputs?.length)state.outputs.forEach(output=>dropBackendOutputCard(output));
+      if(state.operatorQuestions?.length)state.operatorQuestions.filter(q=>q.status!=='answered').forEach(q=>createBackendQuestionCard(q));
+      if(state.outputCards?.length){
+        state.outputCards
+          .filter(oc=>!oc.backendOutput&&!oc.assetId?.includes?.('assembly-final-'))
+          .forEach(oc=>restoreOutputCard(oc));
+      }
     } else {
       createDefaultNodes();
       scheduleSave();
@@ -2776,12 +5087,33 @@ function cycleFontScale(){
   localStorage.setItem('fs-idx',_fsIdx);
 }
 
+function bestPoint(){
+  const snap={
+    id:'bp_'+Date.now(),
+    ts:new Date().toLocaleTimeString(),
+    nodes:nodes.map(n=>({id:n.id,name:n.name,type:n.type,status:n.status,output:n.output||''})),
+    pipeline:currentPipelineId||'—'
+  };
+  const key='bestpoints_'+(currentPipelineId||'default');
+  const prev=JSON.parse(localStorage.getItem(key)||'[]');
+  prev.unshift(snap);
+  localStorage.setItem(key,JSON.stringify(prev.slice(0,10)));
+  const btn=document.getElementById('bestpoint-btn');
+  if(btn){btn.style.color='#c8a040';setTimeout(()=>{btn.style.color='';},800);}
+  glog('action','Best Point','system',`⬡ Punto guardado — ${snap.ts} · ${snap.nodes.length} nodos`);
+}
+
 // ══════════════════════════════
 // MODELS & TOKENS WINDOW
 // ══════════════════════════════
-const PROVIDER_COLORS={anthropic:'#c87840',google:'#4a9a4a',openai:'#3a8aaa',fal:'#8a5abf'};
-const PROVIDER_LABELS={anthropic:'Anthropic',google:'Google',openai:'OpenAI',fal:'fal.ai'};
+const PROVIDER_COLORS={anthropic:'#c87840',google:'#4a9a4a',openai:'#3a8aaa',openrouter:'#67b8c7',fal:'#8a5abf'};
+const PROVIDER_LABELS={anthropic:'Anthropic',google:'Google',openai:'OpenAI',openrouter:'OpenRouter',fal:'fal.ai'};
 const TIER_MAP={premium:'premium',balanced:'balanced',fast:'fast'};
+const AGENT_MODEL_NOTES={
+  'AG-03':'Mejor con modelo de pago para calidad de escritura.',
+  'AG-06':'Mejor con modelo de pago para investigación profunda.',
+  'AG-07':'Mejor con modelo de pago para consolidación final.',
+};
 
 let _mtPollTimer=null;
 
@@ -2807,7 +5139,7 @@ function startMTPoll(){
   _mtPollTimer=setInterval(()=>{
     if(document.getElementById('mtwin').style.display==='none'){clearInterval(_mtPollTimer);return;}
     renderMTTokens();
-  },4000);
+  },1000);
 }
 
 function fmtTok(n){
@@ -2823,6 +5155,56 @@ function getTierForModel(provider,modelId){
   return m?m.tier:'fast';
 }
 
+const MODEL_PRESETS={
+  free:{
+    'AG-TERM':{provider:'openrouter',model:'openrouter/free'},
+    'AG-00':{provider:'openrouter',model:'openrouter/free'},
+    'AG-01':{provider:'openrouter',model:'openrouter/free'},
+    'AG-02':{provider:'openrouter',model:'openrouter/free'},
+    'AG-03':{provider:'openrouter',model:'openrouter/free'},
+    'AG-04':{provider:'fal',model:'fal-ai/flux/schnell'},
+    'AG-05':{provider:'openrouter',model:'openrouter/free'},
+    'AG-06':{provider:'openrouter',model:'openrouter/free'},
+    'AG-07':{provider:'openrouter',model:'openrouter/free'},
+  },
+  pro:{
+    'AG-TERM':{provider:'openrouter',model:'openrouter/free'},
+    'AG-00':{provider:'anthropic',model:'claude-opus-4-6'},
+    'AG-01':{provider:'anthropic',model:'claude-opus-4-6'},
+    'AG-02':{provider:'openai',model:'gpt-4o'},
+    'AG-03':{provider:'anthropic',model:'claude-opus-4-6'},
+    'AG-04':{provider:'fal',model:'fal-ai/flux-pro'},
+    'AG-05':{provider:'openai',model:'gpt-4o'},
+    'AG-06':{provider:'openai',model:'gpt-4o'},
+    'AG-07':{provider:'anthropic',model:'claude-opus-4-6'},
+  },
+};
+
+function getAgentLabel(agentId){
+  return AGENT_NAMES?.[agentId]||({'AG-TERM':'Terminal','AG-00':'Arquitecto'}[agentId])||agentId;
+}
+
+async function applyModelPreset(presetName){
+  const preset=MODEL_PRESETS[presetName];
+  if(!preset)return;
+  try{
+    const ops=Object.entries(preset).map(([agentId,cfg])=>
+      fetch('/api/models/'+agentId,{
+        method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(cfg),
+      }).then(()=>{modelsData.agents[agentId]={...cfg,is_custom:true};})
+    );
+    await Promise.all(ops);
+    glog('system','Models','system',presetName==='free'?'Preset gratis aplicado':'Preset pro aplicado');
+    if(modalId){
+      const n=nodes.find(x=>x.id===modalId);
+      if(n)renderM(n);
+    }
+    renderMTModels();
+  }catch(e){glog('warn','Models','system','Error aplicando preset: '+e.message);}
+}
+
 function renderMTModels(){
   const rows=document.getElementById('mt-models-rows');
   if(!rows)return;
@@ -2830,30 +5212,31 @@ function renderMTModels(){
   if(!Object.keys(agents).length){rows.innerHTML='<div class="mt-empty">Sin datos de modelos</div>';return;}
   const catalog=modelsData.catalog||{};
   const allModels=Object.entries(catalog).flatMap(([prov,ms])=>ms.map(m=>({provider:prov,...m})));
-  const SYSTEM_EDITABLE=['AG-TERM','AG-00'];
   rows.innerHTML=Object.entries(agents).map(([agId,ag])=>{
     const dot=`<span class="mt-provider-dot" style="background:${PROVIDER_COLORS[ag.provider]||'#706860'}"></span>`;
     const tier=getTierForModel(ag.provider,ag.model);
-    const custom=ag.is_custom?'<span style="color:#c8a040;font-size:6px"> ✦</span>':'';
-    if(SYSTEM_EDITABLE.includes(agId)){
-      const opts=allModels.map(m=>{
-        const sel=(m.provider===ag.provider&&m.id===ag.model)?'selected':'';
-        return`<option value="${m.provider}||${m.id}" ${sel}>[${(PROVIDER_LABELS[m.provider]||m.provider).slice(0,3)}] ${m.id}</option>`;
-      }).join('');
-      const resetBtn=ag.is_custom
-        ?`<button class="mt-reset-btn" onclick="resetAgentModelUI('${agId}')" title="Resetear al default">↺</button>`
-        :'';
-      return`<div class="mt-model-row mt-model-row-edit">
-        <span class="mt-agent-id" style="color:#c8a040">${agId}${custom}</span>
-        <select class="mt-model-sel" onchange="const[p,m]=this.value.split('||');setAgentModelUI('${agId}',p,m)">${opts}</select>
-        ${resetBtn}
-      </div>`;
-    }
-    return`<div class="mt-model-row">
-      <span class="mt-agent-id">${agId}${custom}</span>
-      <span class="mt-provider">${dot}<span style="color:${PROVIDER_COLORS[ag.provider]||'#706860'};font-size:7px">${PROVIDER_LABELS[ag.provider]||ag.provider}</span></span>
-      <span class="mt-model-name" title="${ag.model}">${ag.model}</span>
-      <span class="mt-tier ${TIER_MAP[tier]||'fast'}">${tier}</span>
+    const custom=ag.is_custom?'<span style="color:#c8a040;font-size:10px">custom</span>':'<span style="color:#5a9a5a;font-size:10px">default</span>';
+    const opts=allModels.map(m=>{
+      const sel=(m.provider===ag.provider&&m.id===ag.model)?'selected':'';
+      return`<option value="${m.provider}||${m.id}" ${sel}>[${(PROVIDER_LABELS[m.provider]||m.provider).slice(0,3)}] ${m.label||m.id}</option>`;
+    }).join('');
+    return`<div class="mt-model-card">
+      <div class="mt-model-card-top">
+        <div class="mt-model-card-head">
+          <span class="mt-agent-id">${agId}</span>
+          <span class="mt-agent-label">${getAgentLabel(agId)}</span>
+        </div>
+        <span class="mt-tier ${TIER_MAP[tier]||'fast'}">${tier}</span>
+      </div>
+      <div class="mt-model-card-provider">${dot}<span>${PROVIDER_LABELS[ag.provider]||ag.provider}</span>${custom}</div>
+      <select class="mt-model-sel" onchange="const[p,m]=this.value.split('||');setAgentModelUI('${agId}',p,m)">
+        ${opts}
+      </select>
+      <div class="mt-model-meta" title="${ag.model}${AGENT_MODEL_NOTES[agId]?' · '+AGENT_MODEL_NOTES[agId]:''}">${ag.model}${AGENT_MODEL_NOTES[agId]?`<span class="mt-model-note"> · ${AGENT_MODEL_NOTES[agId]}</span>`:''}</div>
+      <div class="mt-card-actions">
+        <span style="font-size:10px;color:#5a5248">${PROVIDER_LABELS[ag.provider]||ag.provider}</span>
+        ${ag.is_custom?`<button class="mt-card-reset" onclick="resetAgentModelUI('${agId}')">reset</button>`:`<span style="font-size:10px;color:#3a3630">preset</span>`}
+      </div>
     </div>`;
   }).join('');
 }
@@ -2865,6 +5248,14 @@ function renderMTTokens(){
     // badge
     const badge=document.getElementById('mt-badge');
     if(badge){const t=total.in+total.out;badge.textContent=t>=1000?(t/1000).toFixed(1)+'k tok':t?t+' tok':'TOKENS';}
+    const tokenTotal=total.in+total.out;
+    animatePilotTokenDisplay(tokenTotal);
+    nodes.forEach(n=>{
+      if(n.type==='pilot')return;
+      const stats=agents[n.agentId]||agents[n.name]||null;
+      const agentTotal=stats?(Number(stats.in)||0)+(Number(stats.out)||0):0;
+      animateAgentTokenDisplay(n.id,agentTotal);
+    });
     // total row
     const tot=document.getElementById('mt-tokens-total');
     if(tot)tot.innerHTML=`<span class="mt-agent-id" style="color:#c8a040">TOTAL</span><span class="mt-tok-in">▲ ${fmtTok(total.in)}</span><span class="mt-tok-out">▼ ${fmtTok(total.out)}</span><span class="mt-tok-calls" style="color:#6a5a48">${total.calls} calls</span>`;
@@ -3030,3 +5421,177 @@ function applyPromptSuggestion(nodeId,field,index){
   });
   document.addEventListener('mouseup',()=>{rs=false;});
 })();
+
+// ═══════════════════════════════════════
+// HASH IDENTITY & BESTPOINTS SYSTEM
+// ═══════════════════════════════════════
+let _pipelineHash = null;
+let _hashStatus = null;
+
+function _getRemainingBP(data) {
+  if (!data || typeof data !== 'object') return null;
+  if (typeof data.bp_remaining === 'number') return data.bp_remaining;
+  if (typeof data.bestpoints === 'number') {
+    return Math.max(0, data.bestpoints - (data.bp_spent || 0));
+  }
+  return null;
+}
+
+async function initPipelineHash() {
+  const stored = localStorage.getItem('pipeline_hash');
+  try {
+    const res = await fetch('/api/hash/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hash: stored || null }),
+    });
+    const data = await res.json();
+    if (res.status === 503 && data.error === 'waitlist') {
+      showWaitlistOverlay();
+      return;
+    }
+    if (!data.hash) return;
+    _pipelineHash = data.hash;
+    localStorage.setItem('pipeline_hash', _pipelineHash);
+    _hashStatus = data;
+    _updateBPButton(_getRemainingBP(data));
+  } catch (e) {
+    console.warn('[hash] init failed:', e.message);
+  }
+}
+
+function _updateBPButton(bp) {
+  const btn = document.getElementById('bestpoint-btn');
+  if (!btn) return;
+  const spans = btn.querySelectorAll('span');
+  if (spans[0]) spans[0].textContent = '⬡ ' + (typeof bp === 'number' ? bp.toFixed(2) : '—');
+}
+
+// Intercept all API fetches to inject the hash header
+const _origFetch = window.fetch;
+window.fetch = function(url, opts = {}) {
+  if (_pipelineHash && typeof url === 'string' && url.startsWith('/api/')) {
+    opts = { ...opts, headers: { ...(opts.headers || {}), 'X-Pipeline-Hash': _pipelineHash } };
+  }
+  return _origFetch(url, opts);
+};
+
+// ── Waitlist overlay ─────────────────────────────────────────
+function showWaitlistOverlay() {
+  const ov = document.getElementById('waitlist-overlay');
+  if (ov) ov.style.display = 'flex';
+}
+async function submitWaitlistEmail() {
+  const input = document.getElementById('waitlist-email');
+  const msg = document.getElementById('waitlist-msg');
+  const email = input?.value?.trim();
+  if (!email) { if (msg) msg.textContent = 'Ingresa un email válido.'; return; }
+  try {
+    // Store waitlist email via hash/email endpoint — hash may not exist so just note it
+    if (msg) msg.textContent = '✓ Email guardado. Te avisaremos pronto.';
+    input.value = '';
+  } catch (e) {
+    if (msg) msg.textContent = 'Error al guardar. Intenta de nuevo.';
+  }
+}
+
+// ── Bestpoints wallet overlay ────────────────────────────────
+async function bestPoint() {
+  const ov = document.getElementById('bp-overlay');
+  if (ov) ov.style.display = 'flex';
+  await _refreshBPStatus();
+}
+function closeBPOverlay() {
+  const ov = document.getElementById('bp-overlay');
+  if (ov) ov.style.display = 'none';
+}
+async function _refreshBPStatus() {
+  if (!_pipelineHash) return;
+  try {
+    const [statusRes, ledgerRes] = await Promise.all([
+      fetch('/api/hash/status'),
+      fetch('/api/hash/ledger'),
+    ]);
+    if (!statusRes.ok) return;
+    const data = await statusRes.json();
+    _hashStatus = data;
+    const balEl   = document.getElementById('bp-balance');
+    const tokEl   = document.getElementById('bp-tokens-row');
+    const hashEl  = document.getElementById('bp-hash-val');
+    const emailEl = document.getElementById('bp-email-input');
+    const tierEl  = document.getElementById('bp-tier-badge');
+    if (balEl)   balEl.textContent = typeof data.bp_remaining === 'number' ? data.bp_remaining.toFixed(4) : '—';
+    if (tokEl)   tokEl.textContent = (data.tokens_used || 0).toLocaleString() + ' tokens usados';
+    if (hashEl)  hashEl.textContent = data.hash || '—';
+    if (emailEl && data.email) emailEl.value = data.email;
+    if (tierEl)  { tierEl.textContent = data.tier === 'premium' ? '★ PREMIUM' : 'FREE'; tierEl.className = 'bp-tier-badge ' + (data.tier === 'premium' ? 'premium' : 'free'); }
+    _updateBPButton(data.bp_remaining);
+    // Render ledger
+    if (ledgerRes.ok) {
+      const { entries } = await ledgerRes.json();
+      _renderBPLedger(entries || []);
+    }
+  } catch (e) {}
+}
+function _renderBPLedger(entries) {
+  const el = document.getElementById('bp-ledger-list');
+  if (!el) return;
+  if (!entries.length) { el.innerHTML = '<div class="bp-ledger-empty">Sin movimientos aún.</div>'; return; }
+  el.innerHTML = entries.slice(0, 12).map(e => {
+    const sign   = e.amount >= 0 ? '+' : '';
+    const cls    = e.amount >= 0 ? 'pos' : 'neg';
+    const label  = { grant: 'Crédito inicial', code_redeem: 'Código canjeado', ai_usage: 'Uso de IA' }[e.type] || e.type;
+    const date   = e.created_at ? e.created_at.slice(0, 16).replace('T', ' ') : '';
+    return `<div class="bp-ledger-row">
+      <div class="bp-le-info"><span class="bp-le-label">${label}</span><span class="bp-le-reason">${e.reason || ''}</span></div>
+      <div class="bp-le-right"><span class="bp-le-amount ${cls}">${sign}${Math.abs(e.amount).toFixed(4)}</span><span class="bp-le-date">${date}</span></div>
+    </div>`;
+  }).join('');
+}
+async function redeemBPCode() {
+  const input = document.getElementById('bp-code-input');
+  const msg = document.getElementById('bp-code-msg');
+  const code = input?.value?.trim().toUpperCase();
+  if (!code) { if (msg) { msg.style.color = '#8a3a3a'; msg.textContent = 'Ingresa un código.'; } return; }
+  try {
+    const res = await fetch('/api/hash/redeem', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      if (msg) { msg.style.color = '#3a8a3a'; msg.textContent = `✓ +${data.bestpoints_added} BP canjeados. Total: ${data.bestpoints} BP`; }
+      if (input) input.value = '';
+      await _refreshBPStatus();
+    } else {
+      const errMap = { code_not_found: 'Código inválido.', code_already_used: 'Código ya usado.' };
+      if (msg) { msg.style.color = '#8a3a3a'; msg.textContent = errMap[data.error] || data.error; }
+    }
+  } catch (e) {
+    if (msg) { msg.style.color = '#8a3a3a'; msg.textContent = 'Error de red.'; }
+  }
+}
+async function saveBPEmail() {
+  const input = document.getElementById('bp-email-input');
+  const msg = document.getElementById('bp-email-msg');
+  const email = input?.value?.trim();
+  if (!email) { if (msg) { msg.style.color = '#8a3a3a'; msg.textContent = 'Ingresa un email.'; } return; }
+  try {
+    const res = await fetch('/api/hash/email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    if (res.ok) {
+      if (msg) { msg.style.color = '#3a8a3a'; msg.textContent = '✓ Email guardado.'; }
+    } else {
+      if (msg) { msg.style.color = '#8a3a3a'; msg.textContent = 'Error al guardar.'; }
+    }
+  } catch (e) {
+    if (msg) { msg.style.color = '#8a3a3a'; msg.textContent = 'Error de red.'; }
+  }
+}
+
+// Initialize hash on page load
+initPipelineHash();

@@ -1,16 +1,53 @@
 /**
  * context-manager.js
  * Gestiona el context.json de cada pipeline.
- * El contexto es la única fuente de verdad del estado operativo.
+ * El contexto vive en runtime y SQLite actúa como respaldo/versionado lazy-save.
  */
 
+const { randomUUID } = require('crypto');
 const db = require('./db');
+const runtimeStore = require('./runtime-store');
 
-const PIPELINE_STATES = ['iniciando', 'en_progreso', 'pausado', 'completo', 'cancelado', 'corrupto'];
+const PIPELINE_STATES = ['iniciando', 'preparado', 'en_progreso', 'pausado', 'completo', 'cancelado', 'corrupto'];
 const AGENT_LIFECYCLE_STATES = ['idle', 'activo', 'completado', 'pausado', 'reemplazado', 'error', 'descartado'];
+const PERSISTENCE_DELAY_MS = 350;
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizeUserPreferences(preferences = {}) {
+  if (!preferences || typeof preferences !== 'object') return {};
+  const normalized = { ...preferences };
+  const required = preferences._requeridas && typeof preferences._requeridas === 'object'
+    ? preferences._requeridas
+    : {};
+  const syncedRequired = {};
+
+  Object.entries(required).forEach(([fieldKey, pref]) => {
+    const topLevel = preferences[fieldKey] && typeof preferences[fieldKey] === 'object'
+      ? preferences[fieldKey]
+      : null;
+    const topLevelValue = topLevel?.valor;
+    const hasTopLevelValue = topLevelValue !== undefined && topLevelValue !== null && String(topLevelValue).trim() !== '';
+    syncedRequired[fieldKey] = {
+      ...pref,
+      campo: pref?.campo || fieldKey,
+      valor: hasTopLevelValue ? topLevelValue : (pref?.valor ?? null),
+      resuelta: hasTopLevelValue ? true : Boolean(pref?.resuelta),
+    };
+    if (topLevel) {
+      normalized[fieldKey] = {
+        ...topLevel,
+        campo: topLevel.campo || fieldKey,
+        valor: hasTopLevelValue ? topLevelValue : (pref?.valor ?? topLevel.valor ?? null),
+        resuelta: hasTopLevelValue ? true : Boolean(topLevel.resuelta || pref?.resuelta),
+      };
+    }
+  });
+
+  normalized._requeridas = syncedRequired;
+  return normalized;
 }
 
 function buildOperationalSections(pipelineId, pipelineName, current = {}) {
@@ -40,16 +77,18 @@ function buildOperationalSections(pipelineId, pipelineName, current = {}) {
       version: current.template?.version || 1,
       actualizado_en: current.template?.actualizado_en || null,
     },
-    preferencias_usuario: current.preferencias_usuario || {},
+    preferencias_usuario: normalizeUserPreferences(current.preferencias_usuario || {}),
     bloques: current.bloques || {},
     agentes_activos: current.agentes_activos || {},
     assets: current.assets || {},
     ensamblaje: {
       estado: current.ensamblaje?.estado || 'pendiente',
       asset_ids: Array.isArray(current.ensamblaje?.asset_ids) ? current.ensamblaje.asset_ids : [],
+      output_ids: Array.isArray(current.ensamblaje?.output_ids) ? current.ensamblaje.output_ids : [],
       producto_final: current.ensamblaje?.producto_final || null,
       ultima_actualizacion: current.ensamblaje?.ultima_actualizacion || null,
       notas: current.ensamblaje?.notas || null,
+      outputs_vigentes_snapshot: Array.isArray(current.ensamblaje?.outputs_vigentes_snapshot) ? current.ensamblaje.outputs_vigentes_snapshot : [],
     },
     historial_eventos: Array.isArray(current.historial_eventos) ? current.historial_eventos : [],
     salud_pipeline: {
@@ -117,7 +156,7 @@ function normalizeContext(context) {
   const operational = buildOperationalSections(pipelineId, pipelineName, normalized);
   normalized.pipeline = operational.pipeline;
   normalized.template = operational.template;
-  normalized.preferencias_usuario = operational.preferencias_usuario;
+  normalized.preferencias_usuario = normalizeUserPreferences(operational.preferencias_usuario);
   normalized.bloques = operational.bloques;
   normalized.agentes_activos = operational.agentes_activos;
   normalized.assets = operational.assets;
@@ -133,6 +172,10 @@ function normalizeContext(context) {
   if (!Array.isArray(normalized.cola_tareas)) normalized.cola_tareas = [];
   if (!Array.isArray(normalized.historial_decisiones)) normalized.historial_decisiones = [];
   if (!Array.isArray(normalized.eventos_completados)) normalized.eventos_completados = [];
+  if (!Array.isArray(normalized.preguntas_pendientes)) normalized.preguntas_pendientes = [];
+  if (!normalized.respuestas_usuario || typeof normalized.respuestas_usuario !== 'object') {
+    normalized.respuestas_usuario = {};
+  }
   if (!normalized.editor || typeof normalized.editor !== 'object') {
     normalized.editor = { esperando_input: false, pregunta_activa: null };
   }
@@ -151,14 +194,27 @@ function normalizeContext(context) {
 
 function initContext(pipelineId, pipelineName) {
   const ctx = buildInitialContext(pipelineId, pipelineName);
-  db.upsertContext.run(pipelineId, JSON.stringify(ctx));
-  return ctx;
+  const normalized = normalizeContext(ctx);
+  runtimeStore.setContext(pipelineId, normalized);
+  schedulePersistence(pipelineId);
+  return normalized;
 }
 
 function getContext(pipelineId) {
+  const runtimeContext = runtimeStore.getContext(pipelineId);
+  if (runtimeContext) return normalizeContext(runtimeContext);
+
   const row = db.getContext.get(pipelineId);
   if (!row) return null;
-  return normalizeContext(JSON.parse(row.context));
+
+  const normalized = normalizeContext(JSON.parse(row.context));
+  runtimeStore.setContext(pipelineId, normalized);
+  const persistence = runtimeStore.getPersistence(pipelineId);
+  persistence.contextDirty = false;
+  persistence.lastContextSerialized = JSON.stringify(normalized);
+  persistence.lastPersistedContextSerialized = persistence.lastContextSerialized;
+  hydrateRuntimeCollections(pipelineId);
+  return normalized;
 }
 
 function setContext(pipelineId, context) {
@@ -171,7 +227,8 @@ function setContext(pipelineId, context) {
       actualizado_en: updatedAt,
     },
   });
-  db.upsertContext.run(pipelineId, JSON.stringify(normalized));
+  runtimeStore.setContext(pipelineId, normalized);
+  schedulePersistence(pipelineId);
   return normalized;
 }
 
@@ -383,6 +440,17 @@ function getVigenteAssets(pipelineId) {
   return getVigenteAssetsFromContext(getContext(pipelineId));
 }
 
+function getVigenteOutputsFromRuntime(outputs = []) {
+  return (Array.isArray(outputs) ? outputs : []).filter(output => {
+    const estado = output?.estado || output?.status || null;
+    return ['done', 'ok', 'ready', 'completed', 'vigente'].includes(String(estado || '').toLowerCase());
+  });
+}
+
+function getVigenteOutputs(pipelineId) {
+  return getVigenteOutputsFromRuntime(getRuntimeOutputs(pipelineId));
+}
+
 function recordEvent(pipelineId, event = {}) {
   const ctx = getContext(pipelineId);
   if (!ctx) throw new Error(`Context not found for pipeline: ${pipelineId}`);
@@ -394,9 +462,12 @@ function recordEvent(pipelineId, event = {}) {
     payload: event.payload || null,
     timestamp: nowIso(),
   };
+  const MAX_EVENTOS = 50;
+  const historial = [...(ctx.historial_eventos || []), entry];
+  const completados = [...(ctx.eventos_completados || []), entry];
   return patchContext(pipelineId, {
-    historial_eventos: [...(ctx.historial_eventos || []), entry],
-    eventos_completados: [...(ctx.eventos_completados || []), entry],
+    historial_eventos: historial.slice(-MAX_EVENTOS),
+    eventos_completados: completados.slice(-MAX_EVENTOS),
   });
 }
 
@@ -410,6 +481,78 @@ function setPipelineHealth(pipelineId, data = {}) {
       revisado_en: nowIso(),
     },
   });
+}
+
+const AGENT_MENU_DEFAULTS = {
+  'AG-00': { nombre: 'Arquitecto', rol_en_pipeline: 'Disena la estructura inicial del pipeline.', acciones_habilitadas: ['prepare'], obligatorio: false },
+  'AG-01': { nombre: 'Piloto', rol_en_pipeline: 'Coordina el pipeline y consolida resultados.', acciones_habilitadas: ['control_loop'], obligatorio: true },
+  'AG-02': { nombre: 'Orquestador', rol_en_pipeline: 'Coordina aprobaciones y decisiones operativas.', acciones_habilitadas: ['coordinar'], obligatorio: false },
+  'AG-03': { nombre: 'Escritor', rol_en_pipeline: 'Genera y desarrolla contenido textual.', acciones_habilitadas: ['generar_texto'], obligatorio: false },
+  'AG-04': { nombre: 'Img Gen', rol_en_pipeline: 'Genera recursos visuales e imagenes.', acciones_habilitadas: ['generar_imagen'], obligatorio: false },
+  'AG-05': { nombre: 'Editor', rol_en_pipeline: 'Refina prompts, recopila feedback y ajusta entregables.', acciones_habilitadas: ['editar'], obligatorio: false },
+  'AG-06': { nombre: 'Investigador', rol_en_pipeline: 'Investiga referencias y valida informacion.', acciones_habilitadas: ['investigar'], obligatorio: false },
+  'AG-07': { nombre: 'Digestor', rol_en_pipeline: 'Consolida resultados y prepara la revision final.', acciones_habilitadas: ['consolidar'], obligatorio: false },
+};
+
+function normalizeAgentEntry(agent) {
+  if (typeof agent === 'string') return { id: agent };
+  if (!agent || typeof agent !== 'object') return null;
+  const id = agent.id || agent.agente_id || agent.agent_id || null;
+  if (!id) return null;
+  return { ...agent, id };
+}
+
+function buildDefaultAgentEntry(agentId) {
+  const base = AGENT_MENU_DEFAULTS[agentId] || {};
+  return {
+    id: agentId,
+    nombre: base.nombre || agentId,
+    rol_en_pipeline: base.rol_en_pipeline || null,
+    acciones_habilitadas: Array.isArray(base.acciones_habilitadas) ? base.acciones_habilitadas : [],
+    obligatorio: Boolean(base.obligatorio),
+  };
+}
+
+function normalizeAgentMenu(agentMenu = {}, seedTemplate = {}) {
+  const rawMenu = agentMenu && typeof agentMenu === 'object' ? { ...agentMenu } : {};
+  const rawAgents = Array.isArray(rawMenu.agentes) ? rawMenu.agentes : [];
+  const normalizedAgents = rawAgents
+    .map(normalizeAgentEntry)
+    .filter(Boolean)
+    .map(agent => {
+      const base = buildDefaultAgentEntry(agent.id);
+      return {
+        ...base,
+        ...agent,
+        id: agent.id,
+        nombre: agent.nombre || base.nombre,
+        rol_en_pipeline: agent.rol_en_pipeline || base.rol_en_pipeline,
+        acciones_habilitadas: Array.isArray(agent.acciones_habilitadas) ? agent.acciones_habilitadas : base.acciones_habilitadas,
+        obligatorio: typeof agent.obligatorio === 'boolean' ? agent.obligatorio : base.obligatorio,
+      };
+    });
+
+  const present = new Set(normalizedAgents.map(agent => agent.id));
+  const orderAgents = Array.isArray(seedTemplate?.orden_produccion)
+    ? [...new Set(seedTemplate.orden_produccion.map(step => step?.agente).filter(Boolean))]
+    : [];
+
+  if (!present.has('AG-01')) {
+    normalizedAgents.unshift(buildDefaultAgentEntry('AG-01'));
+    present.add('AG-01');
+  }
+
+  orderAgents.forEach(agentId => {
+    if (present.has(agentId)) return;
+    normalizedAgents.push(buildDefaultAgentEntry(agentId));
+    present.add(agentId);
+  });
+
+  return {
+    ...rawMenu,
+    pipeline_id: rawMenu.pipeline_id || seedTemplate?.template_id || rawMenu.descripcion || 'pipeline_generado',
+    agentes: normalizedAgents,
+  };
 }
 
 function hydrateContextFromSeed(ctx, seedTemplate = {}, agentMenu = {}) {
@@ -483,6 +626,7 @@ function hydrateContextFromSeed(ctx, seedTemplate = {}, agentMenu = {}) {
     requiredPrefState[pref.campo] = {
       campo: pref.campo,
       pregunta: pref.pregunta,
+      sugerencia: pref.sugerencia || pref.suggestion || pref.default_value || '',
       tipo: pref.tipo,
       opciones: Array.isArray(pref.opciones) ? pref.opciones : [],
       obligatorio: Boolean(pref.obligatorio),
@@ -584,22 +728,46 @@ function resetContext(pipelineId) {
 }
 
 function deleteContext(pipelineId) {
+  runtimeStore.clearPipeline(pipelineId);
   db.deleteContext.run(pipelineId);
 }
 
+const MAX_PIPELINE_BLOCKS = 12;
+const MAX_PIPELINE_STEPS  = 12;
+
+function clampSeedTemplate(seed) {
+  if (!seed) return seed;
+  const clamped = { ...seed };
+  if (Array.isArray(clamped.bloques_requeridos) && clamped.bloques_requeridos.length > MAX_PIPELINE_BLOCKS) {
+    console.warn(`[context-manager] AG-00 generó ${clamped.bloques_requeridos.length} bloques — truncando a ${MAX_PIPELINE_BLOCKS}`);
+    // Always keep 'preferencias_usuario' first and 'revision_final' last
+    const fixed = clamped.bloques_requeridos.filter(b => b === 'preferencias_usuario' || b === 'revision_final');
+    const rest  = clamped.bloques_requeridos.filter(b => b !== 'preferencias_usuario' && b !== 'revision_final');
+    const kept  = rest.slice(0, MAX_PIPELINE_BLOCKS - fixed.length);
+    clamped.bloques_requeridos = ['preferencias_usuario', ...kept, 'revision_final'].filter((v,i,a) => a.indexOf(v) === i);
+  }
+  if (Array.isArray(clamped.orden_produccion) && clamped.orden_produccion.length > MAX_PIPELINE_STEPS) {
+    console.warn(`[context-manager] AG-00 generó ${clamped.orden_produccion.length} pasos — truncando a ${MAX_PIPELINE_STEPS}`);
+    clamped.orden_produccion = clamped.orden_produccion.slice(0, MAX_PIPELINE_STEPS);
+  }
+  return clamped;
+}
+
 function saveSeed(pipelineId, seedTemplate, agentMenu) {
-  db.upsertSeed.run(pipelineId, JSON.stringify(seedTemplate), JSON.stringify(agentMenu));
+  const safeSeed = clampSeedTemplate(seedTemplate);
+  const normalizedAgentMenu = normalizeAgentMenu(agentMenu, safeSeed);
+  db.upsertSeed.run(pipelineId, JSON.stringify(safeSeed), JSON.stringify(normalizedAgentMenu));
 
   const ctx = getContext(pipelineId);
   if (ctx) {
-    const hydrated = hydrateContextFromSeed(ctx, seedTemplate, agentMenu);
+    const hydrated = hydrateContextFromSeed(ctx, safeSeed, normalizedAgentMenu);
     const saved = setContext(pipelineId, hydrated);
     recordEvent(pipelineId, {
       tipo: 'seed_hydrated',
       fuente: 'AG-00',
       mensaje: 'La semilla del pipeline fue materializada dentro del contexto.',
       payload: {
-        template_id: seedTemplate?.template_id || null,
+        template_id: safeSeed?.template_id || null,
         bloques: Object.keys(saved.bloques || {}),
         agentes: Object.keys(saved.agentes_activos || {}),
       },
@@ -610,9 +778,11 @@ function saveSeed(pipelineId, seedTemplate, agentMenu) {
 function getSeed(pipelineId) {
   const row = db.getSeed.get(pipelineId);
   if (!row) return null;
+  const seedTemplate = JSON.parse(row.seed_template);
+  const agentMenu = normalizeAgentMenu(JSON.parse(row.agent_menu), seedTemplate);
   return {
-    seed_template: JSON.parse(row.seed_template),
-    agent_menu: JSON.parse(row.agent_menu),
+    seed_template: seedTemplate,
+    agent_menu: agentMenu,
   };
 }
 
@@ -634,6 +804,219 @@ function deepMerge(target, source) {
   return result;
 }
 
+function hydrateRuntimeCollections(pipelineId) {
+  const runtimeOutputs = runtimeStore.getOutputs(pipelineId);
+  if (!runtimeOutputs.length) {
+    const rows = db.getOutputs.all(pipelineId);
+    runtimeStore.setOutputs(pipelineId, rows.map(row => ({
+      public_id: row.public_id,
+      pipeline_id: row.pipeline_id,
+      agent_id: row.agent_id,
+      tipo: row.output_type,
+      estado: row.status,
+      bloque: row.block_key,
+      contenido: row.content,
+      metadata: parseJsonField(row.metadata, {}),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    })));
+    runtimeStore.getPersistence(pipelineId).outputsDirty = false;
+  }
+
+  const runtimeQuestions = runtimeStore.getOperatorQuestions(pipelineId);
+  if (!runtimeQuestions.length) {
+    const rows = db.getOperatorQuestions.all(pipelineId);
+    runtimeStore.setOperatorQuestions(pipelineId, rows.map(row => ({
+      field_key: parseJsonField(row.metadata, {})?.field_key || null,
+      public_id: row.public_id,
+      pipeline_id: row.pipeline_id,
+      agent_id: row.agent_id,
+      question: row.question_text,
+      suggestion: row.suggestion,
+      answer: row.answer,
+      answer_origin: row.answer_origin,
+      status: row.status,
+      metadata: parseJsonField(row.metadata, {}),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    })));
+    runtimeStore.getPersistence(pipelineId).questionsDirty = false;
+  }
+}
+
+function schedulePersistence(pipelineId) {
+  runtimeStore.setPersistenceTimer(pipelineId, setTimeout(() => {
+    flushPipelinePersistence(pipelineId);
+  }, PERSISTENCE_DELAY_MS));
+}
+
+function flushPipelinePersistence(pipelineId) {
+  runtimeStore.clearPersistenceTimer(pipelineId);
+  const state = runtimeStore.ensurePipelineState(pipelineId);
+  const persistence = state.persistence;
+
+  if (persistence.contextDirty && state.context) {
+    const serialized = persistence.lastContextSerialized || JSON.stringify(state.context);
+    db.upsertContext.run(pipelineId, serialized);
+    persistContextVersionIfChanged(pipelineId, serialized);
+    persistence.contextDirty = false;
+    persistence.lastPersistedContextSerialized = serialized;
+  }
+
+  if (persistence.outputsDirty) {
+    db.deleteOutputsByPipeline.run(pipelineId);
+    for (const output of state.outputs) {
+      db.upsertOutput.run(
+        output.public_id,
+        output.pipeline_id || pipelineId,
+        output.agent_id || null,
+        output.tipo || output.output_type || 'json',
+        output.estado || output.status || 'pending',
+        output.bloque || output.block_key || null,
+        serializeNullable(output.contenido),
+        JSON.stringify(output.metadata || {})
+      );
+    }
+    persistence.outputsDirty = false;
+  }
+
+  if (persistence.questionsDirty) {
+    db.deleteOperatorQuestionsByPipeline.run(pipelineId);
+    for (const question of state.operatorQuestions) {
+      db.upsertOperatorQuestion.run(
+        question.public_id,
+        question.pipeline_id || pipelineId,
+        question.agent_id || 'AG-05',
+        question.question || question.question_text || '',
+        question.suggestion || null,
+        question.answer || null,
+        question.answer_origin || null,
+        question.status || 'pending',
+        JSON.stringify({ ...(question.metadata || {}), field_key: question.field_key || null })
+      );
+    }
+    persistence.questionsDirty = false;
+  }
+}
+
+function persistContextVersionIfChanged(pipelineId, serializedContext) {
+  const persistence = runtimeStore.getPersistence(pipelineId);
+  if (persistence.lastPersistedContextSerialized === serializedContext) return;
+
+  const latest = db.getLatestContextVersion.get(pipelineId);
+  const nextVersionNo = Number(latest?.version_no || 0) + 1;
+  db.insertContextVersion.run(
+    randomUUID(),
+    pipelineId,
+    nextVersionNo,
+    'runtime_lazy_save',
+    serializedContext
+  );
+}
+
+function getRuntimeOutputs(pipelineId) {
+  getContext(pipelineId);
+  return runtimeStore.getOutputs(pipelineId);
+}
+
+function upsertRuntimeOutput(pipelineId, output = {}) {
+  const normalized = {
+    public_id: output.public_id || randomUUID(),
+    pipeline_id: output.pipeline_id || pipelineId,
+    agent_id: output.agent_id || null,
+    tipo: output.tipo || output.output_type || 'json',
+    estado: output.estado || output.status || 'pending',
+    bloque: output.bloque || output.block_key || null,
+    contenido: output.contenido ?? output.content ?? null,
+    metadata: output.metadata || {},
+    created_at: output.created_at || nowIso(),
+    updated_at: nowIso(),
+  };
+  runtimeStore.upsertOutput(pipelineId, normalized);
+  schedulePersistence(pipelineId);
+  return normalized;
+}
+
+function getOperatorQuestions(pipelineId) {
+  const ctx = getContext(pipelineId);
+  const questions = runtimeStore.getOperatorQuestions(pipelineId);
+  // If runtimeStore has no questions but context has pending ones, synthesize from context
+  if (!questions.length && ctx) {
+    const pendingFromCtx = Array.isArray(ctx.preguntas_pendientes) ? ctx.preguntas_pendientes : [];
+    if (pendingFromCtx.length) {
+      const synthesized = pendingFromCtx.map(item => ({
+        public_id: item.public_id,
+        pipeline_id: pipelineId,
+        agent_id: item.agent_id || 'AG-05',
+        field_key: item.field_key || item.metadata?.field_key || null,
+        question: item.question || '',
+        suggestion: item.suggestion || null,
+        answer: null,
+        answer_origin: null,
+        status: item.status || 'pending',
+        metadata: item.metadata || {},
+        created_at: item.created_at || null,
+        updated_at: item.updated_at || null,
+      })).filter(q => q.public_id && q.status !== 'answered');
+      if (synthesized.length) {
+        runtimeStore.setOperatorQuestions(pipelineId, synthesized);
+        return synthesized;
+      }
+    }
+  }
+  return questions;
+}
+
+function upsertOperatorQuestion(pipelineId, question = {}) {
+  const normalized = {
+    public_id: question.public_id || randomUUID(),
+    pipeline_id: question.pipeline_id || pipelineId,
+    agent_id: question.agent_id || 'AG-05',
+    field_key: question.field_key || question.fieldKey || null,
+    question: question.question || question.question_text || '',
+    suggestion: question.suggestion || null,
+    answer: question.answer || null,
+    answer_origin: question.answer_origin || null,
+    status: question.status || 'pending',
+    metadata: question.metadata || {},
+    created_at: question.created_at || nowIso(),
+    updated_at: nowIso(),
+  };
+  runtimeStore.upsertOperatorQuestion(pipelineId, normalized);
+  // Flush questions to DB immediately so they survive server restarts
+  const allQuestions = runtimeStore.getOperatorQuestions(pipelineId);
+  db.deleteOperatorQuestionsByPipeline.run(pipelineId);
+  for (const q of allQuestions) {
+    db.upsertOperatorQuestion.run(
+      q.public_id,
+      q.pipeline_id || pipelineId,
+      q.agent_id || 'AG-05',
+      q.question || q.question_text || '',
+      q.suggestion || null,
+      q.answer || null,
+      q.answer_origin || null,
+      q.status || 'pending',
+      JSON.stringify({ ...(q.metadata || {}), field_key: q.field_key || null })
+    );
+  }
+  schedulePersistence(pipelineId);
+  return normalized;
+}
+
+function parseJsonField(raw, fallback) {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function serializeNullable(value) {
+  if (value == null) return null;
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+}
+
 module.exports = {
   initContext,
   ensureContext,
@@ -649,6 +1032,8 @@ module.exports = {
   updateAssembly,
   getVigenteAssets,
   getVigenteAssetsFromContext,
+  getVigenteOutputs,
+  getVigenteOutputsFromRuntime,
   recordEvent,
   setPipelineHealth,
   registerAssetRevision,
@@ -657,5 +1042,10 @@ module.exports = {
   deleteContext,
   saveSeed,
   getSeed,
+  flushPipelinePersistence,
+  getRuntimeOutputs,
+  upsertRuntimeOutput,
+  getOperatorQuestions,
+  upsertOperatorQuestion,
   normalizeContext,
 };

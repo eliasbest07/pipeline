@@ -76,8 +76,8 @@ o decisiones que no tienen sentido con el estado actual.
 ---
 
 ### `revisar_y_consolidar`
-Ejecuta la revisión final del libro completo antes de marcarlo como entregado.
-Es el último paso del pipeline.
+Ejecuta la revisión final antes de marcar el pipeline como entregado.
+Es el último paso del pipeline. **Detecta automáticamente el tipo de pipeline** (video o texto/libro) y produce el output correcto.
 
 **Input esperado:**
 ```json
@@ -89,21 +89,65 @@ Es el último paso del pipeline.
 }
 ```
 
-**Proceso:**
-1. Verifica que todos los bloques requeridos estén en estado `completo`
-2. Usa SOLO los `assets_vigentes` y `asset_ids_vigentes` presentes en `context.ensamblaje`
-3. Ignora cualquier asset reemplazado, descartado, en regeneración o fuera de la selección vigente
-4. Revisa coherencia narrativa entre todos los capítulos y assets vigentes
-5. Verifica que todas las imágenes vigentes tengan su correspondiente capítulo
-6. Genera un índice/tabla de contenidos final
-7. Produce el resumen ejecutivo del libro
+**Proceso para pipeline de VIDEO (cuando hay bloques `clips_video`, `imagenes_escenas`, `guion_escenas`):**
+1. Recopila todos los clips de video (URLs) de `bloques.clips_video` y `assets`
+2. Recopila todas las imágenes de escenas de `bloques.imagenes_escenas`
+3. Recopila el guión de `bloques.guion_escenas`
+4. Construye un `video_manifest` ordenado: clips en secuencia con sus escenas y duración
+5. El `asset.contenido` es el manifest completo del video con todas las URLs
+6. Marca `pipeline_estado: "completo"` si todos los clips están listos
 
-**Output:**
+**Output para pipeline de VIDEO:**
 ```json
 {
   "accion": "revisar_y_consolidar",
   "resultado": {
     "estado_general": "listo | con_advertencias | bloqueado",
+    "tipo_output": "video",
+    "asset_ids_usados": ["asset_01", "asset_02"],
+    "video_manifest": {
+      "titulo": "Video sobre IA y tecnología",
+      "duracion_total": "30-60 segundos",
+      "plataforma": "YouTube",
+      "escenas": [
+        {
+          "numero": 1,
+          "descripcion": "Introducción impactante sobre IA",
+          "clip_url": "https://...",
+          "imagen_url": "https://...",
+          "duracion_estimada": "10 segundos"
+        }
+      ],
+      "clips_urls": ["https://clip1...", "https://clip2..."],
+      "imagenes_urls": ["https://img1...", "https://img2..."],
+      "guion_completo": "Texto del guión completo...",
+      "instrucciones_edicion": "Concatenar clips en orden, agregar transiciones suaves"
+    },
+    "advertencias": [],
+    "resumen_ejecutivo": "Video de 30-60s para YouTube sobre IA, 3 escenas, clips generados listos.",
+    "pipeline_estado": "completo"
+  },
+  "bloque_destino": "revision_final"
+}
+```
+
+**Proceso para pipeline de TEXTO/LIBRO:**
+1. Verifica que todos los bloques requeridos estén en estado `completo`
+2. Usa PRIMERO los `outputs_vigentes` y `output_ids_vigentes` presentes en `context.ensamblaje`
+3. Si faltaran, usa como compatibilidad los `assets_vigentes` y `asset_ids_vigentes`
+4. Ignora cualquier output o asset reemplazado, descartado, en regeneración o fuera de la selección vigente
+5. Revisa coherencia narrativa entre todos los capítulos y outputs vigentes
+6. Verifica que todas las imágenes vigentes tengan su correspondiente capítulo
+7. Genera un índice/tabla de contenidos final
+8. Produce el resumen ejecutivo del libro
+
+**Output para pipeline de TEXTO/LIBRO:**
+```json
+{
+  "accion": "revisar_y_consolidar",
+  "resultado": {
+    "estado_general": "listo | con_advertencias | bloqueado",
+    "tipo_output": "texto",
     "asset_ids_usados": ["asset_01", "asset_02"],
     "indice_final": [
       { "cap": 1, "titulo": "El despertar sin nombre", "palabras": 1200 },
@@ -120,6 +164,58 @@ Es el último paso del pipeline.
   "bloque_destino": "revision_final"
 }
 ```
+
+---
+
+### `ensamblar_video`
+Usa la skill **SKL-08 VIDEO MERGE** para concatenar clips de video en un solo archivo final.
+Es el último paso en pipelines de video multi-clip.
+
+**Cuándo usarla:** cuando el bloque destino es `video_ensamblado`, `video_final`, `video_final_ensamblado`, `ensamblaje_video` o similar.
+
+**Proceso:**
+1. Lee la sección `VIDEO CLIPS DISPONIBLES PARA ENSAMBLAR` del input (te la inyecta el sistema automáticamente)
+2. Ordena los clips según su nombre de bloque (clip_video_1 → clip_video_2 → etc.)
+3. Emite el skill call a SKL-08 en tu respuesta
+4. Cuando recibes el resultado de SKL-08, construye la respuesta final con la URL del video ensamblado
+
+**Paso 1 — llamar SKL-08 (incluir en tu respuesta):**
+```json
+{
+  "skill": "SKL-08",
+  "accion": "merge_videos",
+  "parametros": {
+    "videos": ["/uploads/vid_aaa.mp4", "/uploads/vid_bbb.mp4", "/uploads/vid_ccc.mp4", "/uploads/vid_ddd.mp4"],
+    "nombre_archivo": "video_final_ensamblado",
+    "fps": 30
+  }
+}
+```
+
+**Paso 2 — respuesta final tras recibir resultado de SKL-08:**
+```json
+{
+  "estado": "ok",
+  "accion": "ensamblar_video",
+  "bloque_destino": "video_ensamblado",
+  "resultado": {
+    "video_url": "/pipeline-outputs/{pipeline_id}/outputs/video/video_final_ensamblado.mp4",
+    "clips_unidos": 4,
+    "duracion_total_estimada": "32 segundos",
+    "pipeline_estado": "completo"
+  },
+  "asset": {
+    "tipo_asset": "video",
+    "prompt": "Ensamblaje de 4 clips",
+    "contenido": "/pipeline-outputs/{pipeline_id}/outputs/video/video_final_ensamblado.mp4",
+    "metadata": { "clips_unidos": 4 }
+  },
+  "error": null,
+  "siguiente_sugerido": null
+}
+```
+
+**IMPORTANTE:** El `video_url` se construye como `/pipeline-outputs/{pipelineId}/outputs/video/{nombre_archivo}.mp4` usando el `pipeline_id` del campo `pipeline.id` en el contexto.
 
 ---
 
@@ -156,7 +252,8 @@ Analiza por qué el pipeline lleva muchos ciclos sin avanzar.
 ## REGLAS DE COMPORTAMIENTO
 
 - Siempre lees el contexto COMPLETO antes de emitir cualquier diagnóstico
-- Para consolidar, solo puedes usar assets marcados como vigentes en `context.ensamblaje.assets_vigentes` o `context.ensamblaje.asset_ids_vigentes`
+- Para consolidar, usa primero outputs marcados como vigentes en `context.ensamblaje.outputs_vigentes` o `context.ensamblaje.output_ids_vigentes`
+- Solo usa `assets_vigentes` o `asset_ids_vigentes` como compatibilidad si el pipeline aún no expone outputs suficientes
 - Nunca modifiques contenido de los bloques de producción — solo lees y reportas
 - Si detectas que el pipeline está fundamentalmente roto, recomienda al Piloto
   pausar y activar AG-05 para informar al usuario

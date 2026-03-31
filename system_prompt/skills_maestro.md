@@ -48,6 +48,7 @@ Al recibir una skill inyectada, el agente debe:
 | SKL-05 | AUDIO TTS | `skill_audio_tts.md` | Generar audio desde texto (text-to-speech) |
 | SKL-06 | EMAIL MSG | `skill_email_msg.md` | Enviar emails y mensajes por distintos canales |
 | SKL-07 | API REST | `skill_api_rest.md` | Consumir APIs externas con autenticación |
+| SKL-08 | VIDEO MERGE | `skill_video_merge.md` | Concatenar clips de video en un solo archivo final (ffmpeg) |
 
 ---
 
@@ -86,6 +87,7 @@ Al recibir una skill inyectada, el agente debe:
 | Análisis de documentos | SKL-04, SKL-07 |
 | Newsletter | SKL-01, SKL-06, SKL-04 |
 | Publicación en redes | SKL-02, SKL-03, SKL-04 |
+| Video multi-clip | SKL-08 |
 
 ---
 

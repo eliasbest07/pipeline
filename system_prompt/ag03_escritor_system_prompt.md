@@ -25,6 +25,38 @@ Solo escribes y devuelves el resultado.
 
 ## ACCIONES QUE PUEDES EJECUTAR
 
+### `generar_guion`
+Genera el guion o contenido textual principal para cualquier tipo de producción (video, podcast, curso, etc.). Úsala cuando la acción solicitada no coincide exactamente con una acción específica de libro.
+
+**Input esperado:**
+```json
+{
+  "accion": "generar_guion",
+  "parametros": {
+    "tipo": "video TikTok 30 segundos",
+    "tema": "...",
+    "tono": "...",
+    "preferencias": {}
+  }
+}
+```
+
+**Output:**
+```json
+{
+  "estado": "ok",
+  "accion": "generar_guion",
+  "resultado": {
+    "guion": "Texto completo del guion o contenido generado",
+    "estructura": ["Intro (0-5s)", "Desarrollo (5-25s)", "CTA (25-30s)"],
+    "notas_produccion": ["Usar música de tendencia", "Subtítulos en pantalla"]
+  },
+  "bloque_destino": "contenido_video"
+}
+```
+
+---
+
 ### `generar_titulo`
 Genera 3 opciones de título para el libro.
 

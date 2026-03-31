@@ -173,6 +173,39 @@
 <div id="pside">
   <div id="pside-head"><h2>Pipelines</h2><button class="pside-cls" onclick="closeSide()">✕</button></div>
   <div id="pside-body">
+    <!-- 1. SKILLS -->
+    <div class="ps-sec">
+      <div class="ps-lbl">Skills — arrastra a un agente</div>
+      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'web_search')"><div class="ps-skill-dot" style="background:#2a6a8a"></div>⌕ web_search<span class="ps-skill-desc">búsqueda</span></div>
+      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'notion_mcp')"><div class="ps-skill-dot" style="background:#2a2a5a"></div>📋 notion_mcp<span class="ps-skill-desc">MCP</span></div>
+      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'github_mcp')"><div class="ps-skill-dot" style="background:#1a3a1a"></div>⬡ github_mcp<span class="ps-skill-desc">MCP</span></div>
+      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'image_gen')"><div class="ps-skill-dot" style="background:#2a1060"></div>⬡ image_gen<span class="ps-skill-desc">imagen</span></div>
+      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'voice_tts')"><div class="ps-skill-dot" style="background:#1a3a2a"></div>♪ voice_tts<span class="ps-skill-desc">audio</span></div>
+      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'email_send')"><div class="ps-skill-dot" style="background:#3a1a3a"></div>✉ email_send<span class="ps-skill-desc">email</span></div>
+      <div id="custom-skills-list"></div>
+    </div>
+    <div class="ps-div"></div>
+    <!-- 2. AGENTES TEMPLATE -->
+    <div class="ps-sec">
+      <div class="ps-lbl">Agentes template</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'pilot')"><div class="ps-adot" style="background:#8a2222"></div>Piloto</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'research')"><div class="ps-adot" style="background:#1a4a2a"></div>Investigación</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'prompt')"><div class="ps-adot" style="background:#6a4215"></div>Prompt</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'image')"><div class="ps-adot" style="background:#2a1060"></div>Imagen</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'video')"><div class="ps-adot" style="background:#0e1e4a"></div>Video</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'assembly')"><div class="ps-adot" style="background:#3a1a08"></div>Ensamblaje</div>
+      <div class="ps-agent" draggable="true" ondragstart="pd(event,'human')"><div class="ps-adot" style="background:#c8a040"></div>Operador</div>
+      <div id="custom-agents-list"></div>
+    </div>
+    <div class="ps-div"></div>
+    <!-- 3. INPUTS -->
+    <div class="ps-sec">
+      <div class="ps-lbl">Inputs — arrastra al canvas</div>
+      <div class="ps-input" draggable="true" ondragstart="idrag(event,'text')"><div class="ps-input-dot" style="background:#c8a040"></div>✦ texto<span class="ps-input-desc">input</span></div>
+      <div class="ps-input" draggable="true" ondragstart="idrag(event,'image')"><div class="ps-input-dot" style="background:#6090c0"></div>⬡ imagen<span class="ps-input-desc">input</span></div>
+    </div>
+    <div class="ps-div"></div>
+    <!-- 4. PIPELINES -->
     <div class="ps-sec">
       <div class="ps-lbl">Pipelines</div>
       <div id="pipelines-list"><div class="ps-empty">Cargando...</div></div>
@@ -183,64 +216,94 @@
       <div class="ps-new" onclick="openAgentBuilder()" style="color:#c8a040;border-color:rgba(200,160,64,.15);margin-top:3px">✦ Nuevo agente con IA</div>
       <div class="ps-new" onclick="openSkillBuilder()" style="color:#6090c0;border-color:rgba(74,122,191,.15);margin-top:3px">⬡ Nueva skill con IA</div>
     </div>
-    <div class="ps-div"></div>
-    <div class="ps-sec">
-      <div class="ps-lbl">Skills</div>
-      <div id="custom-skills-list"></div>
-    </div>
-    <div class="ps-div"></div>
-    <div class="ps-sec">
-      <div class="ps-lbl">Agentes personalizados</div>
-      <div id="custom-agents-list"></div>
-    </div>
-    <div class="ps-div"></div>
-    <div class="ps-sec">
-      <div class="ps-lbl">Tipos de agente</div>
-      <div class="ps-agent" draggable="true" ondragstart="pd(event,'pilot')"><div class="ps-adot" style="background:#8a2222"></div>Piloto</div>
-      <div class="ps-agent" draggable="true" ondragstart="pd(event,'research')"><div class="ps-adot" style="background:#1a4a2a"></div>Investigación</div>
-      <div class="ps-agent" draggable="true" ondragstart="pd(event,'prompt')"><div class="ps-adot" style="background:#6a4215"></div>Prompt</div>
-      <div class="ps-agent" draggable="true" ondragstart="pd(event,'image')"><div class="ps-adot" style="background:#2a1060"></div>Imagen</div>
-      <div class="ps-agent" draggable="true" ondragstart="pd(event,'video')"><div class="ps-adot" style="background:#0e1e4a"></div>Video</div>
-      <div class="ps-agent" draggable="true" ondragstart="pd(event,'assembly')"><div class="ps-adot" style="background:#3a1a08"></div>Ensamblaje</div>
-      <div class="ps-agent" draggable="true" ondragstart="pd(event,'human')"><div class="ps-adot" style="background:#c8a040"></div>Operador</div>
-    </div>
-    <div class="ps-div"></div>
-    <div class="ps-sec">
-      <div class="ps-lbl">Skills — arrastra a un agente</div>
-      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'web_search')"><div class="ps-skill-dot" style="background:#2a6a8a"></div>⌕ web_search<span class="ps-skill-desc">búsqueda</span></div>
-      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'notion_mcp')"><div class="ps-skill-dot" style="background:#2a2a5a"></div>📋 notion_mcp<span class="ps-skill-desc">MCP</span></div>
-      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'github_mcp')"><div class="ps-skill-dot" style="background:#1a3a1a"></div>⬡ github_mcp<span class="ps-skill-desc">MCP</span></div>
-      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'image_gen')"><div class="ps-skill-dot" style="background:#2a1060"></div>⬡ image_gen<span class="ps-skill-desc">imagen</span></div>
-      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'voice_tts')"><div class="ps-skill-dot" style="background:#1a3a2a"></div>♪ voice_tts<span class="ps-skill-desc">audio</span></div>
-      <div class="ps-skill" draggable="true" ondragstart="sdrag(event,'email_send')"><div class="ps-skill-dot" style="background:#3a1a3a"></div>✉ email_send<span class="ps-skill-desc">email</span></div>
-    </div>
   </div>
 </div>
 
 <!-- TOOLBAR -->
 <div id="toolbar">
-  <button class="tpipe" onclick="openSide()">
-    <svg viewBox="0 0 10 8" width="10" height="8"><line x1="0" y1="1" x2="10" y2="1" stroke="currentColor" stroke-width="1.2"/><line x1="0" y1="4" x2="10" y2="4" stroke="currentColor" stroke-width="1.2"/><line x1="0" y1="7" x2="10" y2="7" stroke="currentColor" stroke-width="1.2"/></svg>
-    <span id="pipe-label">Video Pipeline v1</span> <span style="opacity:.4;font-size:8px">▾</span>
-  </button>
-  <div class="tsep"></div>
-  <button class="tb" onclick="addNodeCenter('pilot')">+ Nodo</button>
-<button class="tb" onclick="delSel()">✕ Borrar</button>
-  <div class="tsep"></div>
-  <button class="tb" id="run-btn-mini" onclick="runAll()">▶ Run</button>
-  <button class="tb" id="stop-btn-mini" onclick="stopAll()">■ Stop</button>
-  <button class="tb" onclick="resetAll()">↺ Reset</button>
-  <div class="tsep"></div>
-  <button class="tb" onclick="fitAll()">⊞ Fit</button>
-  <div class="tsep"></div>
-  <button class="trun" id="run-btn-main" onclick="runAll()">▶ EJECUTAR</button><span id="run-timer" aria-live="polite">00:00</span>
-  <div class="tsep"></div>
-  <button class="tb" id="mtwbtn" onclick="toggleMTWin()" title="Modelos y tokens">⬡ Modelos</button>
-  <button class="tb" id="fsbtn" onclick="cycleFontScale()" title="Tamaño de letra">Aa</button>
+  <div class="toolbar-frame">
+    <button class="trun" id="run-btn-main" onclick="runAll()">
+      <span class="trun-ico">▶</span>
+      <span class="trun-lbl">Ejecutar</span>
+    </button>
+    <button class="tool-btn tb-col" id="stop-btn-mini" onclick="stopAll()">
+      <span class="tb-stop-ico">■</span>
+      <span>stop</span>
+    </button>
+    <span id="run-timer" aria-live="polite">00:00</span>
+    <div class="tsep"></div>
+    <button class="tool-btn" onclick="resetAll()">Rest</button>
+    <div class="tsep"></div>
+    <button class="tool-btn" id="add-agent-btn" onclick="toggleAddAgentMenu(event)"><span style="font-size:15px;margin-right:4px;line-height:1">+</span>Agregar</button>
+    <button class="tool-btn" onclick="fitAll()">Centrar</button>
+    <div class="tsep"></div>
+    <button class="tool-btn tb-col" id="mtwbtn" onclick="toggleMTWin()"><span>LLM</span><span>Modelos</span></button>
+    <button class="tool-btn" id="fsbtn" onclick="cycleFontScale()">Aa+</button>
+    <button class="tool-btn tb-col" id="bestpoint-btn" onclick="bestPoint()"><span>⬡ Best</span><span>points</span></button>
+    <div class="tsep"></div>
+    <button class="tool-btn tb-col tb-hist" onclick="openSide()">
+      <svg viewBox="0 0 14 10" width="14" height="10" fill="none" stroke="currentColor" stroke-width="1.4"><line x1="0" y1="1" x2="14" y2="1"/><line x1="0" y1="5" x2="14" y2="5"/><line x1="0" y1="9" x2="14" y2="9"/></svg>
+      <span>Historial</span>
+    </button>
+    <span id="pipe-label" style="display:none">Pipeline</span>
+  </div>
+</div>
+<div id="add-agent-menu" class="add-agent-menu hidden">
+  <div class="add-agent-menu-inner">
+    <div class="add-input-row">
+      <div class="add-input-btn" draggable="true" ondragstart="idrag(event,'text');closeAddAgentMenu()" onclick="addInputCenter('text');closeAddAgentMenu()">
+        <span>Texto</span>
+      </div>
+      <div class="add-input-btn" draggable="true" ondragstart="idrag(event,'image');closeAddAgentMenu()" onclick="addInputCenter('image');closeAddAgentMenu()">
+        <span>Imagen</span>
+      </div>
+      <div class="add-input-btn" draggable="true" ondragstart="idrag(event,'audio');closeAddAgentMenu()" onclick="addInputCenter('audio');closeAddAgentMenu()">
+        <span>Audio</span>
+      </div>
+    </div>
+    <div class="add-agent-list">
+      <div class="add-agent-card pilot" data-agent-type="pilot" draggable="true" ondragstart="pd(event,'pilot');closeAddAgentMenu()" onclick="addNodeCenter('pilot');closeAddAgentMenu()">
+        <div class="add-agent-dot"></div>
+        <div class="add-agent-name">Piloto</div>
+        <div class="add-agent-meta">coordina el pipeline</div>
+      </div>
+      <div class="add-agent-card human" data-agent-type="human" draggable="true" ondragstart="pd(event,'human');closeAddAgentMenu()" onclick="addNodeCenter('human');closeAddAgentMenu()">
+        <div class="add-agent-dot"></div>
+        <div class="add-agent-name">Operador</div>
+        <div class="add-agent-meta">decision e input humano</div>
+      </div>
+      <div class="add-agent-card research" data-agent-type="research" draggable="true" ondragstart="pd(event,'research');closeAddAgentMenu()" onclick="addNodeCenter('research');closeAddAgentMenu()">
+        <div class="add-agent-dot"></div>
+        <div class="add-agent-name">Investigacion</div>
+        <div class="add-agent-meta">busqueda y analisis</div>
+      </div>
+      <div class="add-agent-card prompt" data-agent-type="prompt" draggable="true" ondragstart="pd(event,'prompt');closeAddAgentMenu()" onclick="addNodeCenter('prompt');closeAddAgentMenu()">
+        <div class="add-agent-dot"></div>
+        <div class="add-agent-name">Prompt</div>
+        <div class="add-agent-meta">prompts y guiones</div>
+      </div>
+      <div class="add-agent-card image" data-agent-type="image" draggable="true" ondragstart="pd(event,'image');closeAddAgentMenu()" onclick="addNodeCenter('image');closeAddAgentMenu()">
+        <div class="add-agent-dot"></div>
+        <div class="add-agent-name">Imagen</div>
+        <div class="add-agent-meta">assets visuales</div>
+      </div>
+      <div class="add-agent-card video" data-agent-type="video" draggable="true" ondragstart="pd(event,'video');closeAddAgentMenu()" onclick="addNodeCenter('video');closeAddAgentMenu()">
+        <div class="add-agent-dot"></div>
+        <div class="add-agent-name">Video</div>
+        <div class="add-agent-meta">clips y motion</div>
+      </div>
+      <div class="add-agent-card assembly" data-agent-type="assembly" draggable="true" ondragstart="pd(event,'assembly');closeAddAgentMenu()" onclick="addNodeCenter('assembly');closeAddAgentMenu()">
+        <div class="add-agent-dot"></div>
+        <div class="add-agent-name">Ensamblaje</div>
+        <div class="add-agent-meta">producto final</div>
+      </div>
+    </div>
+    <div class="add-agent-menu-label add-agent-menu-label-bottom">Arrastra y suelta en el canvas</div>
+  </div>
 </div>
 
 <!-- CANVAS -->
-<div id="wrap" ondragover="event.preventDefault()" ondrop="drop(event)"
+<div id="wrap" ondragover="event.preventDefault();event.dataTransfer.dropEffect='copy'" ondrop="drop(event)"
   onmousedown="wmd(event)" onmousemove="wmm(event)" onmouseup="wmu(event)"
   onwheel="ww(event)" oncontextmenu="sctx(event)">
   <div id="canvas">
@@ -269,17 +332,20 @@
     <div class="ltb-dots">
       <div class="ltb-dot close" onclick="toggleMTWin()" title="Cerrar"></div>
       <div class="ltb-dot min" onclick="toggleMTMin()" title="Minimizar"></div>
-      <div class="ltb-dot max" onclick="toggleMTMax()" title="Maximizar"></div>
     </div>
     <span class="ltb-title">Modelos — Pipeline Actual</span>
     <span class="ltb-badge" id="mt-badge">TOKENS</span>
   </div>
   <div id="mtbody">
     <div id="mt-models-section">
-      <div class="mt-sec-hdr">
-        <span>AGENTE</span><span>PROVIDER</span><span>MODELO</span><span>TIER</span>
+      <div class="mt-models-toolbar">
+        <div class="mt-models-title">Modelos activos</div>
+        <div class="mt-preset-actions">
+          <button class="mt-preset-btn" onclick="applyModelPreset('free')">Gratis</button>
+          <button class="mt-preset-btn premium" onclick="applyModelPreset('pro')">Pro</button>
+        </div>
       </div>
-      <div id="mt-models-rows"></div>
+      <div id="mt-models-rows" class="mt-models-strip"></div>
     </div>
     <div class="mt-divider"></div>
     <div id="mt-tokens-section">
@@ -296,7 +362,9 @@
 
 <!-- LOG TERMINAL -->
 <div id="logwin" style="height:420px">
+  <div id="logresize-t" title="Arrastrar para cambiar alto"></div>
   <div id="logresize-w" title="Arrastrar para cambiar ancho"></div>
+  <div id="logresize-r" title="Arrastrar para cambiar ancho"></div>
   <div id="logtbar">
     <div class="ltb-dots">
       <div class="ltb-dot min" onclick="toggleLogMin()" title="Minimizar"></div>
@@ -324,7 +392,7 @@
   </div>
   <div id="log-inputrow">
     <span id="log-cmd-prompt">›</span>
-    <input id="log-cmd" placeholder="/skill /agente /pipeline /help..." />
+    <input id="log-cmd" placeholder="Escribe aqui" />
     <button id="log-cmd-send" onclick="parseLogCommand()">↵</button>
     <div id="cmd-hints"></div>
   </div>
@@ -369,6 +437,8 @@
     </div>
   </div>
   <div id="awin-resize"></div>
+  <div id="awin-resize-t" title="Arrastrar para cambiar alto"></div>
+  <div id="awin-resize-r" title="Arrastrar para cambiar ancho"></div>
 </div>
 
 <!-- SKILL ADAPT PANEL -->
@@ -417,6 +487,64 @@
       <div class="mtab" onclick="stab(this,'out')">Output</div>
     </div>
     <div class="mbody" id="mbody"></div>
+  </div>
+</div>
+
+<!-- WAITLIST OVERLAY -->
+<div id="waitlist-overlay" style="display:none">
+  <div id="waitlist-box">
+    <div id="waitlist-icon">⬡</div>
+    <div id="waitlist-title">Pipeline OS está al límite</div>
+    <div id="waitlist-sub">Estamos en beta privada. Deja tu email y te avisamos cuando haya espacio.</div>
+    <input id="waitlist-email" type="email" placeholder="tu@email.com" />
+    <button id="waitlist-send" onclick="submitWaitlistEmail()">Unirme a la lista →</button>
+    <div id="waitlist-msg"></div>
+  </div>
+</div>
+
+<!-- BESTPOINTS WALLET OVERLAY -->
+<div id="bp-overlay" onclick="if(event.target===this)closeBPOverlay()" style="display:none">
+  <div id="bp-box">
+    <div id="bp-head">
+      <span id="bp-title">⬡ Bestpoints — Wallet</span>
+      <button class="bp-cls" onclick="closeBPOverlay()">✕</button>
+    </div>
+    <div id="bp-body">
+      <div id="bp-balance-row">
+        <span id="bp-balance">—</span>
+        <span id="bp-balance-label">bestpoints</span>
+        <span id="bp-tier-badge" class="bp-tier-badge free">FREE</span>
+      </div>
+      <div id="bp-tokens-row"><span id="bp-tokens-used">—</span> tokens usados</div>
+      <div class="bp-divider"></div>
+      <div id="bp-code-section">
+        <div class="bp-sec-lbl">Canjear código de activación</div>
+        <div id="bp-code-row">
+          <input id="bp-code-input" type="text" placeholder="CÓDIGO-ACTIVACION" />
+          <button id="bp-code-btn" onclick="redeemBPCode()">Canjear</button>
+        </div>
+        <div id="bp-code-msg"></div>
+      </div>
+      <div class="bp-divider"></div>
+      <div id="bp-email-section">
+        <div class="bp-sec-lbl">Email (opcional — para recuperar acceso)</div>
+        <div id="bp-email-row">
+          <input id="bp-email-input" type="email" placeholder="tu@email.com" />
+          <button id="bp-email-btn" onclick="saveBPEmail()">Guardar</button>
+        </div>
+        <div id="bp-email-msg"></div>
+      </div>
+      <div class="bp-divider"></div>
+      <div id="bp-ledger-section">
+        <div class="bp-sec-lbl">Historial de movimientos</div>
+        <div id="bp-ledger-list"></div>
+      </div>
+      <div class="bp-divider"></div>
+      <div id="bp-hash-row">
+        <span class="bp-hash-lbl">Tu ID:</span>
+        <span id="bp-hash-val" class="bp-hash-val">—</span>
+      </div>
+    </div>
   </div>
 </div>
 
