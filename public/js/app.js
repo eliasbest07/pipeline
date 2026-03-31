@@ -121,6 +121,8 @@ let awinStep=0,awinBuilding={},awinTyping=false,awinPrevH=520,awinMinimized=fals
 let logFilter='all',logPrevH=420,logMinimized=false;
 let operatorWaiting=false;
 let operatorQuestionQueue=[];
+const answeredQuestionIds=new Set();
+const pendingQuestionSubmissions=new Set();
 let terminalQuestionTimer=null; // auto-answer timer for terminal suggestion
 let terminalActiveQuestion=null; // question currently shown in terminal input
 let _pendingSeedPrompt=null;
@@ -179,6 +181,22 @@ function fitAll(){
   sc=Math.min(w/(x1-x0),h/(y1-y0),.9);
   px=-x0*sc+(w-(x1-x0)*sc)/2;py=-y0*sc+(h-(y1-y0)*sc)/2;
   applyT();
+}
+
+function isFiniteNum(v){
+  return Number.isFinite(v);
+}
+
+function isValidPoint(p){
+  return !!p&&isFiniteNum(p.x)&&isFiniteNum(p.y);
+}
+
+function getWrapRectSafe(){
+  const wrap=document.getElementById('wrap');
+  if(!wrap)return null;
+  const rect=wrap.getBoundingClientRect();
+  if(!isFiniteNum(rect.left)||!isFiniteNum(rect.top))return null;
+  return rect;
 }
 
 // ══════════════════════════════
@@ -1139,6 +1157,7 @@ function mkQuestionCard(opts){
 
 function _resolveQuestion(cardId, useInput){
   const oc=outputCards.find(c=>c.id===cardId);if(!oc)return;
+  if(oc.isQuestionResolved||answeredQuestionIds.has(oc.questionId)||pendingQuestionSubmissions.has(oc.questionId))return;
   if(oc._timer)clearInterval(oc._timer);
   const inputEl=document.getElementById('qinput_'+cardId);
   const userVal=inputEl?.value?.trim()||'';
@@ -1265,6 +1284,7 @@ function drainOperatorQuestionQueue(){
 
 function createBackendQuestionCard(question){
   if(!question||!question.public_id||question.status==='answered')return;
+  if(answeredQuestionIds.has(question.public_id))return;
   if(outputCards.some(c=>c.questionId===question.public_id)||operatorQuestionQueue.some(q=>q.public_id===question.public_id))return;
   ensureLogVisibleForActivity();
   if(operatorQuestionQueue.length>=MAX_OPERATOR_QUESTION_CARDS)operatorQuestionQueue=operatorQuestionQueue.slice(-MAX_OPERATOR_QUESTION_CARDS+1);
@@ -1274,16 +1294,31 @@ function createBackendQuestionCard(question){
 
 async function submitOperatorQuestionAnswer(questionId,answer,source){
   if(!currentPipelineId||!questionId)return;
+  if(answeredQuestionIds.has(questionId)||pendingQuestionSubmissions.has(questionId))return;
   const answer_origin=source==='usuario'?'manual':'automatic';
+  pendingQuestionSubmissions.add(questionId);
   try{
-    await fetch('/api/pipelines/'+currentPipelineId+'/operator-questions/'+questionId+'/answer',{
+    const res=await fetch('/api/pipelines/'+currentPipelineId+'/operator-questions/'+questionId+'/answer',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({answer,answer_origin}),
     });
+    if(res.ok)answeredQuestionIds.add(questionId);
   }catch(e){
     glog('warn','Operador','human','No se pudo registrar la respuesta de la pregunta.');
+  }finally{
+    pendingQuestionSubmissions.delete(questionId);
   }
+}
+
+function markQuestionResolvedFromBackend(question){
+  if(!question?.public_id)return null;
+  answeredQuestionIds.add(question.public_id);
+  pendingQuestionSubmissions.delete(question.public_id);
+  if(terminalActiveQuestion?.public_id===question.public_id)clearTerminalQuestionTimer();
+  const card=outputCards.find(c=>c.questionId===question.public_id)||null;
+  if(card&&card._timer)clearInterval(card._timer);
+  return card;
 }
 
 function expandContextCard(id){
@@ -1333,6 +1368,7 @@ function openContextCard(pipelineId){
 function mkOutputCard(oc){
   const el=document.createElement('div');
   el.className='output-card';el.id=oc.id;
+  if(oc.isSynthesized)el.classList.add('synth-output-card');
   el.style.cssText=`left:${oc.x}px;top:${oc.y}px`;
   const tc=IO_COLORS[oc.type]||'#706860';
   const previewHTML=getCardPreview(oc);
@@ -2340,7 +2376,14 @@ function wmm(e){
   if(connFrom){
     const mx=(e.clientX-wrap.left-px)/sc,my=(e.clientY-wrap.top-py)/sc;
     const sp=ppos2(connFrom);
-    if(sp){const p=document.getElementById('tc');p.setAttribute('d',cubic(sp.x,sp.y,mx,my));p.style.display='block';}
+    if(sp&&isValidPoint(sp)&&isFiniteNum(mx)&&isFiniteNum(my)){
+      const dAttr=cubic(sp.x,sp.y,mx,my);
+      const p=document.getElementById('tc');
+      if(dAttr&&p){
+        p.setAttribute('d',dAttr);
+        p.style.display='block';
+      }
+    }
   }
 }
 function wmu(e){
@@ -2468,33 +2511,45 @@ function finishConn(toId,toPt){
 function ppos(nid,pt){
   const el=document.getElementById(nid);if(!el)return null;
   const port=el.querySelector(`.port.${pt}`);if(!port)return null;
-  const pr=port.getBoundingClientRect(),wrap=document.getElementById('wrap').getBoundingClientRect();
-  return{x:(pr.left+pr.width/2-wrap.left-px)/sc,y:(pr.top+pr.height/2-wrap.top-py)/sc};
+  const pr=port.getBoundingClientRect(),wrap=getWrapRectSafe();
+  if(!wrap||!isFiniteNum(pr.left)||!isFiniteNum(pr.top)||!isFiniteNum(pr.width)||!isFiniteNum(pr.height)||!isFiniteNum(sc)||!sc)return null;
+  const point={x:(pr.left+pr.width/2-wrap.left-px)/sc,y:(pr.top+pr.height/2-wrap.top-py)/sc};
+  return isValidPoint(point)?point:null;
 }
 function ppos2(cf){
   // Handle both node ports and card connect port
   const el=document.getElementById(cf.nid);if(!el)return null;
   const portSel=cf.src==='card'?'.oc-connect-port':`.port.${cf.pt}`;
   const port=el.querySelector(portSel);if(!port)return null;
-  const pr=port.getBoundingClientRect(),wrap=document.getElementById('wrap').getBoundingClientRect();
-  return{x:(pr.left+pr.width/2-wrap.left-px)/sc,y:(pr.top+pr.height/2-wrap.top-py)/sc};
+  const pr=port.getBoundingClientRect(),wrap=getWrapRectSafe();
+  if(!wrap||!isFiniteNum(pr.left)||!isFiniteNum(pr.top)||!isFiniteNum(pr.width)||!isFiniteNum(pr.height)||!isFiniteNum(sc)||!sc)return null;
+  const point={x:(pr.left+pr.width/2-wrap.left-px)/sc,y:(pr.top+pr.height/2-wrap.top-py)/sc};
+  return isValidPoint(point)?point:null;
 }
-function cubic(x1,y1,x2,y2){const d=Math.abs(x2-x1)*.5;return`M${x1},${y1} C${x1+d},${y1} ${x2-d},${y2} ${x2},${y2}`;}
+function cubic(x1,y1,x2,y2){
+  if(![x1,y1,x2,y2].every(isFiniteNum))return'';
+  const d=Math.abs(x2-x1)*.5;
+  return`M${x1},${y1} C${x1+d},${y1} ${x2-d},${y2} ${x2},${y2}`;
+}
 function getPortPos(id,pt){
   // Works for both nodes and output cards
   const el=document.getElementById(id);if(!el)return null;
   let portEl=el.querySelector(`.port.${pt}`)||el.querySelector('.oc-connect-port');
   if(!portEl)return null;
-  const pr=portEl.getBoundingClientRect(),wrap=document.getElementById('wrap').getBoundingClientRect();
-  return{x:(pr.left+pr.width/2-wrap.left-px)/sc,y:(pr.top+pr.height/2-wrap.top-py)/sc};
+  const pr=portEl.getBoundingClientRect(),wrap=getWrapRectSafe();
+  if(!wrap||!isFiniteNum(pr.left)||!isFiniteNum(pr.top)||!isFiniteNum(pr.width)||!isFiniteNum(pr.height)||!isFiniteNum(sc)||!sc)return null;
+  const point={x:(pr.left+pr.width/2-wrap.left-px)/sc,y:(pr.top+pr.height/2-wrap.top-py)/sc};
+  return isValidPoint(point)?point:null;
 }
 function drawConns(){
   const svg=document.getElementById('svgl');svg.querySelectorAll('.cpath').forEach(p=>p.remove());
   conns.forEach(c=>{
     const fp=getPortPos(c.from,c.fp),tp=getPortPos(c.to,c.tp||'in');
     if(!fp||!tp)return;
+    const dAttr=cubic(fp.x,fp.y,tp.x,tp.y);
+    if(!dAttr)return;
     const path=document.createElementNS('http://www.w3.org/2000/svg','path');
-    path.setAttribute('d',cubic(fp.x,fp.y,tp.x,tp.y));
+    path.setAttribute('d',dAttr);
     let cls='cpath',marker='ma';
     if(c.isCtxConn){cls='cpath ctx-conn';marker='ma-ctx';}
     else if(c.fromSeed){cls='cpath seed-conn';marker='ma-a';}
@@ -2940,10 +2995,20 @@ function dropBackendOutputCard(output){
     existing.type=mapBackendOutputType(output.tipo);
     existing.label=buildBackendOutputLabel(output);
     existing.meta=output.metadata||{};
+    if(output.agent_id==='AG-07'){
+      existing.isSynthesized=true;
+      if(!existing.synthIndex){
+        existing.synthIndex=Math.max(1,outputCards.filter(c=>c.fromNodeName==='DIGESTOR'||c.isSynthesized).length);
+      }
+      existing.label=buildBackendOutputLabel(output,existing);
+    }
     const el=document.getElementById(existing.id);
     if(el){
+      el.classList.toggle('synth-output-card',!!existing.isSynthesized);
       const body=el.querySelector('.oc-body');
+      const size=el.querySelector('.oc-size');
       if(body)body.innerHTML=getCardPreview(existing)+'<div class="oc-expand-hint">ver completo</div>';
+      if(size)size.textContent=existing.label;
     }
     if(output.agent_id==='AG-05')setTimeout(()=>{tryMaterializeOperatorQuestionsFromOutputCard(existing);},0);
     return existing;
@@ -2951,12 +3016,19 @@ function dropBackendOutputCard(output){
 
   const fromNode=nodes.find(n=>n.agentId===output.agent_id)||nodes.find(n=>n.id===output.agent_id);
   const existingFromNode=outputCards.filter(c=>c.fromNodeId===fromNode?.id&&c.backendOutput).length;
+  const isSynthesizedOutput=output.agent_id==='AG-07';
   const COLS=3,CARD_W=224,CARD_H=150,GAP_X=28,GAP_Y=22;
   const col=existingFromNode%COLS,row=Math.floor(existingFromNode/COLS);
-  const fallbackX=fromNode?(fromNode.x+290+col*(CARD_W+GAP_X)):(2600+outputCards.length*(CARD_W+GAP_X));
-  const fallbackY=fromNode?(fromNode.y+row*(CARD_H+GAP_Y)):(2200+outputCards.length*20);
+  const synthCount=outputCards.filter(c=>c.isSynthesized).length;
+  const fallbackX=isSynthesizedOutput&&fromNode
+    ? fromNode.x+320+(synthCount%2)*(CARD_W+40)
+    : fromNode?(fromNode.x+290+col*(CARD_W+GAP_X)):(2600+outputCards.length*(CARD_W+GAP_X));
+  const fallbackY=isSynthesizedOutput&&fromNode
+    ? fromNode.y+16+Math.floor(synthCount/2)*(CARD_H+28)
+    : fromNode?(fromNode.y+row*(CARD_H+GAP_Y)):(2200+outputCards.length*20);
   const nodeType=fromNode?.type||AGENT_TYPE_MAP[output.agent_id]||'system';
   const nodeTheme=T[nodeType]||{dot:'#4a7a9a'};
+  const synthIndex=isSynthesizedOutput?(synthCount+1):null;
   const pos=findOpenCardPosition(fallbackX,fallbackY,getCardCanvasSize({_kind:'output',type:mapBackendOutputType(output.tipo)}));
   const oc={
     id:'oc'+Math.random().toString(36).slice(2,10),
@@ -2972,7 +3044,10 @@ function dropBackendOutputCard(output){
     y:pos.y,
     backendOutput:true,
     meta:output.metadata||{},
+    isSynthesized:isSynthesizedOutput,
+    synthIndex,
   };
+  oc.label=buildBackendOutputLabel(output,oc);
   outputCards.push(oc);
   mkOutputCard(oc);
   drawConns();
@@ -2990,9 +3065,13 @@ function mapBackendOutputType(tipo){
   return'text';
 }
 
-function buildBackendOutputLabel(output){
+function buildBackendOutputLabel(output,card){
   const bloque=output.bloque||output.metadata?.bloque_destino||'resultado';
   const tipo=(output.tipo||'output').toUpperCase();
+  if(output.agent_id==='AG-07'){
+    const idx=card?.synthIndex||1;
+    return'SINTESIS '+idx+' · '+bloque;
+  }
   return tipo+' · '+bloque;
 }
 
@@ -4308,6 +4387,7 @@ function updateMM(){
 async function loadModelsData(){
   try{
     modelsData=await fetch('/api/models').then(r=>r.json());
+    renderToolbarModelStrip();
     // Refresh models section if window is open
     if(document.getElementById('mtwin')?.style.display!=='none')renderMTModels();
   }catch(e){console.warn('Could not load models catalog',e);}
@@ -4327,6 +4407,7 @@ async function setAgentModelUI(agentId, provider, model){
     const n=nodes.find(x=>x.agentId===agentId);
     if(n&&modalId===n.id)renderM(n);
     renderMTModels();
+    renderToolbarModelStrip();
   }catch(e){glog('warn','Models','system','Error cambiando modelo: '+e.message);}
 }
 
@@ -4338,6 +4419,7 @@ async function resetAgentModelUI(agentId){
     const n=nodes.find(x=>x.agentId===agentId);
     if(n&&modalId===n.id)renderM(n);
     renderMTModels();
+    renderToolbarModelStrip();
   }catch(e){glog('warn','Models','system','Error reseteando modelo: '+e.message);}
 }
 
@@ -4814,9 +4896,7 @@ function connectSSE(pipelineId){
   es.addEventListener('operator_question_answered',e=>{
     const d=JSON.parse(e.data);
     if(d?.question?.public_id){
-      // Clear terminal timer if this was the active question
-      if(terminalActiveQuestion?.public_id===d.question.public_id)clearTerminalQuestionTimer();
-      const card=outputCards.find(c=>c.questionId===d.question.public_id);
+      const card=markQuestionResolvedFromBackend(d.question);
       if(card){
         if(!card.isQuestionResolved){
           card.type='text';
@@ -5202,7 +5282,29 @@ async function applyModelPreset(presetName){
       if(n)renderM(n);
     }
     renderMTModels();
+    renderToolbarModelStrip();
   }catch(e){glog('warn','Models','system','Error aplicando preset: '+e.message);}
+}
+
+function renderToolbarModelStrip(){
+  const el=document.getElementById('toolbar-models-strip');
+  if(!el)return;
+  const agents=modelsData.agents||{};
+  const catalog=modelsData.catalog||{};
+  if(!Object.keys(agents).length){el.innerHTML='';return;}
+  const allModels=Object.entries(catalog).flatMap(([prov,ms])=>ms.map(m=>({provider:prov,...m})));
+  el.innerHTML=Object.entries(agents).map(([agId,ag])=>{
+    const opts=allModels.map(m=>{
+      const sel=(m.provider===ag.provider&&m.id===ag.model)?'selected':'';
+      return`<option value="${m.provider}||${m.id}" ${sel}>${m.label||m.id}</option>`;
+    }).join('');
+    return`<label class="toolbar-model-chip" title="${getAgentLabel(agId)}">
+      <span class="toolbar-model-chip-label">${agId}</span>
+      <select onchange="const[p,m]=this.value.split('||');setAgentModelUI('${agId}',p,m)">
+        ${opts}
+      </select>
+    </label>`;
+  }).join('');
 }
 
 function renderMTModels(){
@@ -5212,6 +5314,7 @@ function renderMTModels(){
   if(!Object.keys(agents).length){rows.innerHTML='<div class="mt-empty">Sin datos de modelos</div>';return;}
   const catalog=modelsData.catalog||{};
   const allModels=Object.entries(catalog).flatMap(([prov,ms])=>ms.map(m=>({provider:prov,...m})));
+  rows.className='mt-models-list';
   rows.innerHTML=Object.entries(agents).map(([agId,ag])=>{
     const dot=`<span class="mt-provider-dot" style="background:${PROVIDER_COLORS[ag.provider]||'#706860'}"></span>`;
     const tier=getTierForModel(ag.provider,ag.model);

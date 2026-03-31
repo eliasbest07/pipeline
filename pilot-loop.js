@@ -778,6 +778,12 @@ const SEED_BLOCK_AGENT_MAP = {
   'estructura_capitulos':     { agente_id: 'AG-03', accion: 'generar_estructura' },
   'estructura_modulos':       { agente_id: 'AG-03', accion: 'generar_estructura' },
   'contenido_modulos':        { agente_id: 'AG-03', accion: 'generar_contenido' },
+  'materiales_pdf':           { agente_id: 'AG-03', accion: 'generar_contenido' },
+  'pdf_ilustrado':            { agente_id: 'AG-03', accion: 'generar_contenido' },
+  'manual_pdf':               { agente_id: 'AG-03', accion: 'generar_contenido' },
+  'guia_pdf':                 { agente_id: 'AG-03', accion: 'generar_contenido' },
+  'ebook':                    { agente_id: 'AG-03', accion: 'generar_contenido' },
+  'documento_final':          { agente_id: 'AG-03', accion: 'generar_contenido' },
   'capitulos_contenido':      { agente_id: 'AG-03', accion: 'escribir_capitulo' },
   'escritura_contenido':      { agente_id: 'AG-03', accion: 'generar_contenido' },
   'subtitulos':               { agente_id: 'AG-03', accion: 'generar_subtitulos' },
@@ -827,6 +833,7 @@ const BLOCK_PATTERN_MAP = [
   { pattern: /investigacion|investigación|research|busqueda|tendencia|referencia|dato.*mercado/i, map: { agente_id: 'AG-06', accion: 'realizar_investigacion' } },
   { pattern: /preferencia/i,                                               map: { agente_id: 'AG-05', accion: 'recopilar_preferencias_usuario' } },
   // Texto
+  { pattern: /pdf|ebook|manual|guia|guía|documento|dossier|material(es)?/i, map: { agente_id: 'AG-03', accion: 'generar_contenido' } },
   { pattern: /guion|script|narraci|narrac|prompt.*imagen|imagen.*prompt|escritura|contenido|modulo|capitulo|leccion/i, map: { agente_id: 'AG-03', accion: 'generar_guion' } },
   // Media
   { pattern: /edicion.*video|produccion.*video|video|clip|cinemat/i,       map: { agente_id: 'AG-04', accion: 'generar_video' } },
@@ -871,11 +878,14 @@ function getBlockAutoDispatch(blockName, ctx) {
     mapEntry = BLOCK_PATTERN_MAP.find(p => p.pattern.test(blockName))?.map || null;
     if (mapEntry) console.log(`[pilot] block "${blockName}" matched by pattern → ${mapEntry.agente_id}/${mapEntry.accion}`);
   }
-  const agente_id = block.agente_responsable || mapEntry?.agente_id || 'AG-03';
+  let agente_id = mapEntry?.agente_id || block.agente_responsable || 'AG-03';
   // Always use canonical accion from map — accion_inicial from AG-00 is free-form and may not match system prompt
   const accion    = mapEntry?.accion || block.accion_inicial || 'generar';
   // Use AG-00's accion_inicial as a human-readable label for log messages
   const accion_label = block.accion_inicial || accion;
+  if (agente_id === 'AG-02' && mapEntry?.agente_id && mapEntry.agente_id !== 'AG-02') {
+    agente_id = mapEntry.agente_id;
+  }
   return {
     agente_id,
     agente_nombre: agente_id,

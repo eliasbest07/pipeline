@@ -31,7 +31,22 @@ body.fs-md .mt-sec-hdr,body.fs-lg .mt-sec-hdr{font-size:calc(11px * var(--fs))}
 
 /* ── TOOLBAR ── */
 #toolbar{position:fixed;top:11px;left:50%;transform:translateX(-50%);z-index:300}
-.toolbar-frame{display:flex;align-items:center;gap:4px;padding:5px 10px;background:rgba(18,14,12,.96);border:1px solid rgba(255,255,255,.08);box-shadow:0 8px 22px rgba(0,0,0,.4),0 0 0 1px rgba(255,255,255,.02) inset;backdrop-filter:blur(12px);border-radius:5px}
+.toolbar-frame{display:inline-flex;align-items:center;gap:4px;position:relative;padding:5px 10px 26px;background:rgba(18,14,12,.96);border:1px solid rgba(255,255,255,.08);box-shadow:0 8px 22px rgba(0,0,0,.4),0 0 0 1px rgba(255,255,255,.02) inset;backdrop-filter:blur(12px);border-radius:5px}
+.toolbar-main-row{display:contents}
+#toolbar-models-line{position:absolute;bottom:4px;left:10px;right:10px;display:flex;align-items:center;gap:6px;overflow:hidden;opacity:.65}
+#toolbar-models-line:hover{opacity:1}
+.toolbar-models-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.toolbar-preset-btn{background:transparent;border:none;color:#6a6058;font-size:9px;letter-spacing:.06em;text-transform:uppercase;font-family:'IBM Plex Mono',monospace;cursor:pointer;padding:2px 4px;flex-shrink:0}
+.toolbar-preset-btn:hover{color:#9a9088}
+.toolbar-preset-btn.premium{color:#7a6030}
+.toolbar-preset-btn.premium:hover{color:#c8a040}
+#toolbar-models-strip{display:flex;align-items:center;gap:8px;overflow-x:auto;overflow-y:hidden;min-width:0;padding-bottom:2px}
+#toolbar-models-strip::-webkit-scrollbar{height:3px}
+#toolbar-models-strip::-webkit-scrollbar-thumb{background:rgba(255,255,255,.06);border-radius:999px}
+.toolbar-model-chip{display:flex;align-items:center;gap:5px;flex:0 0 auto}
+.toolbar-model-chip-label{font-size:9px;color:#5a5248;letter-spacing:.06em;text-transform:uppercase;flex-shrink:0}
+.toolbar-model-chip select{background:transparent;border:none;border-bottom:1px solid rgba(200,160,64,.15);color:#8a7848;font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 4px;max-width:140px;outline:none;cursor:pointer}
+.toolbar-model-chip select:focus{border-bottom-color:rgba(200,160,64,.4);color:#c8a040}
 .tsep{width:1px;height:24px;background:rgba(255,255,255,.09);flex-shrink:0;margin:0 3px}
 .tool-btn{display:flex;align-items:center;justify-content:center;background:transparent;border:none;color:#7f766d;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:4px 8px;cursor:pointer;border-radius:3px;letter-spacing:.03em;transition:.12s;white-space:nowrap;gap:0}
 .tool-btn:hover{background:rgba(255,255,255,.05);color:#cfc7bc}
@@ -293,6 +308,19 @@ body.fs-md .mt-sec-hdr,body.fs-lg .mt-sec-hdr{font-size:calc(11px * var(--fs))}
 }
 .output-card:hover .oc-inner{border-color:rgba(255,255,255,.2);box-shadow:0 6px 32px rgba(0,0,0,.7)}
 .output-card.connectable .oc-inner{border-color:rgba(200,160,64,.4);box-shadow:0 0 0 1px rgba(200,160,64,.2),0 4px 24px rgba(0,0,0,.6)}
+.synth-output-card{z-index:10}
+.synth-output-card .oc-inner{
+  border-color:rgba(200,120,64,.52)!important;
+  box-shadow:0 0 0 1px rgba(200,120,64,.18),0 0 26px rgba(200,120,64,.18),0 6px 30px rgba(0,0,0,.72)!important;
+  background:linear-gradient(180deg,rgba(28,18,10,.98),rgba(14,12,10,.98));
+}
+.synth-output-card .oc-header{
+  background:linear-gradient(90deg,rgba(200,120,64,.18),rgba(0,0,0,.2));
+  border-bottom-color:rgba(200,120,64,.22);
+}
+.synth-output-card .oc-from{color:#c87840}
+.synth-output-card .oc-size{color:#c87840!important}
+.synth-output-card .oc-expand-hint{color:#e0a060}
 /* Seed input card */
 .seed-input-card{width:220px}
 .seed-input-card .oc-inner{border-color:rgba(200,160,64,.4)!important;box-shadow:0 0 20px rgba(200,160,64,.12),0 4px 24px rgba(0,0,0,.6)!important}
@@ -446,16 +474,13 @@ body.fs-md .mt-sec-hdr,body.fs-lg .mt-sec-hdr{font-size:calc(11px * var(--fs))}
 .mt-preset-btn:hover{border-color:rgba(90,154,90,.45);background:rgba(58,138,58,.14)}
 .mt-preset-btn.premium{background:rgba(200,160,64,.08);border-color:rgba(200,160,64,.24);color:#c8a040}
 .mt-preset-btn.premium:hover{background:rgba(200,160,64,.14);border-color:rgba(200,160,64,.45)}
-.mt-models-strip{display:flex;gap:10px;overflow-x:auto;overflow-y:hidden;padding:12px}
-.mt-models-strip::-webkit-scrollbar{height:6px}
-.mt-models-strip::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:999px}
 .mt-tok-hdr{grid-template-columns:90px 110px 110px 60px;position:relative}
 .mt-reset-btn{position:absolute;right:8px;top:50%;transform:translateY(-50%);
   background:none;border:1px solid rgba(255,255,255,.08);border-radius:2px;color:#3a3630;
   font-size:13px;padding:1px 5px;cursor:pointer;font-family:'IBM Plex Mono',monospace;line-height:1}
 .mt-reset-btn:hover{color:#c8a040;border-color:rgba(200,160,64,.3)}
-.mt-model-card{min-width:250px;max-width:250px;background:rgba(18,14,12,.72);border:1px solid rgba(255,255,255,.06);
-  border-radius:8px;padding:10px 10px 12px;display:flex;flex-direction:column;gap:8px;flex-shrink:0}
+.mt-model-card{background:rgba(18,14,12,.72);border:1px solid rgba(255,255,255,.06);
+  border-radius:8px;padding:10px 10px 12px;display:flex;flex-direction:column;gap:8px}
 .mt-model-card:hover{border-color:rgba(200,160,64,.22);box-shadow:0 0 0 1px rgba(200,160,64,.08)}
 .mt-model-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
 .mt-model-card-head{display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -479,6 +504,7 @@ body.fs-md .mt-sec-hdr,body.fs-lg .mt-sec-hdr{font-size:calc(11px * var(--fs))}
 .mt-card-reset{background:none;border:1px solid rgba(255,255,255,.08);border-radius:999px;color:#8e857c;
   padding:4px 10px;font-size:10px;font-family:'IBM Plex Mono',monospace;cursor:pointer}
 .mt-card-reset:hover{color:#c8a040;border-color:rgba(200,160,64,.3)}
+.mt-models-list{display:grid;grid-template-columns:1fr;gap:8px;padding:12px}
 .mt-divider{height:1px;background:rgba(255,255,255,.06);margin:0}
 .mt-tok-total{display:grid;grid-template-columns:90px 110px 110px 60px;padding:5px 10px;
   font-size:14px;border-bottom:1px solid rgba(255,255,255,.06);background:rgba(20,14,12,.6)}

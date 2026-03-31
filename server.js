@@ -363,6 +363,9 @@ app.post('/api/pipelines/:id/operator-questions/:questionId/answer', (req, res, 
     const questions = ctxMgr.getOperatorQuestions(pipelineId);
     const existing = questions.find(item => item.public_id === questionId);
     if (!existing) return res.status(404).json({ error: 'question not found' });
+    if (existing.status === 'answered') {
+      return res.json({ ok: true, question: existing, context: ctxMgr.getContext(pipelineId), deduped: true });
+    }
 
     const updated = ctxMgr.upsertOperatorQuestion(pipelineId, {
       ...existing,

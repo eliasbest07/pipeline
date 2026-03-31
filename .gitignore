@@ -5,3 +5,5 @@ pipeline.db
 pipeline.db-shm
 pipeline.db-wal
 firebase-debug.log
+docs/
+test-pipeline-e2e.js
