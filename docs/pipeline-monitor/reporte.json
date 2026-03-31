@@ -1,0 +1,84 @@
+{
+  "prompt_semilla": "curso online completo",
+  "timestamp": "2026-03-30T18:31:17.733Z",
+  "pipeline_id": "e311c196-4f69-46d2-a113-80a669a43671",
+  "card_questions": [
+    {
+      "texto": "¿Cuál es el título del curso?",
+      "sugerencia": "Fundamentos de Python para principiantes",
+      "status": "pending",
+      "visible": true,
+      "ts": "2026-03-30T18:32:24.559Z",
+      "calidad": {
+        "nivel": "media",
+        "razon": "Tiene detalle pero falta contexto"
+      }
+    }
+  ],
+  "sugerencias_usadas": [],
+  "fases_sse": [
+    {
+      "fase": "piloto_iniciado",
+      "ts": "2026-03-30T18:32:05.918Z"
+    },
+    {
+      "fase": "started",
+      "ts": "2026-03-30T18:32:05.920Z"
+    },
+    {
+      "fase": "ciclo_undefined",
+      "ts": "2026-03-30T18:32:05.920Z"
+    },
+    {
+      "fase": "ciclo_undefined",
+      "ts": "2026-03-30T18:32:38.607Z"
+    },
+    {
+      "fase": "ciclo_undefined",
+      "ts": "2026-03-30T18:33:02.064Z"
+    },
+    {
+      "fase": "ciclo_undefined",
+      "ts": "2026-03-30T18:33:22.126Z"
+    },
+    {
+      "fase": "ciclo_undefined",
+      "ts": "2026-03-30T18:33:41.506Z"
+    },
+    {
+      "fase": "ciclo_undefined",
+      "ts": "2026-03-30T18:33:59.695Z"
+    },
+    {
+      "fase": "ciclo_undefined",
+      "ts": "2026-03-30T18:34:16.332Z"
+    },
+    {
+      "fase": "ciclo_undefined",
+      "ts": "2026-03-30T18:34:31.247Z"
+    },
+    {
+      "fase": "ciclo_undefined",
+      "ts": "2026-03-30T18:34:46.558Z"
+    },
+    {
+      "fase": "ciclo_undefined",
+      "ts": "2026-03-30T18:35:06.565Z"
+    }
+  ],
+  "agentes_activos": [
+    null
+  ],
+  "errores": [],
+  "analisis": {
+    "total_card_questions": 1,
+    "sugerencias_con_contenido": 1,
+    "sugerencias_de_calidad_alta": 0,
+    "sugerencias_de_calidad_media": 1,
+    "sugerencias_de_calidad_baja": 0,
+    "agentes_activados": 1,
+    "fases_completadas": 12,
+    "errores": 0,
+    "output_cards_en_canvas": 14
+  }
+}

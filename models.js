@@ -25,6 +25,9 @@ const MODELS_CATALOG = {
     { id: 'o3-mini',                   label: 'o3-mini',               tier: 'premium',  ctx: 200000 },
     { id: 'o1-mini',                   label: 'o1-mini',               tier: 'balanced', ctx: 128000 },
   ],
+  openrouter: [
+    { id: 'openrouter/free',           label: 'OpenRouter Free Router', tier: 'fast',    ctx: 200000 },
+  ],
   fal: [
     { id: 'fal-ai/flux/schnell',       label: 'FLUX Schnell',          tier: 'fast',     ctx: null },
     { id: 'fal-ai/flux-pro',           label: 'FLUX Pro',              tier: 'premium',  ctx: null },
@@ -45,15 +48,15 @@ const MODELS_CATALOG = {
 // - AG-07 Digestor: sonnet (auditoría con criterio balanceado)
 
 const DEFAULT_AGENT_MODELS = {
-  'AG-TERM': { provider: 'openai',    model: 'gpt-4o-mini' },
-  'AG-00':   { provider: 'openai',    model: 'gpt-4o' },
-  'AG-01':   { provider: 'openai',    model: 'gpt-4o-mini' },
-  'AG-02':   { provider: 'openai',    model: 'gpt-4o-mini' },
-  'AG-03':   { provider: 'openai',    model: 'gpt-4o' },
-  'AG-04':   { provider: 'fal',       model: 'fal-ai/flux/schnell' },
-  'AG-05':   { provider: 'openai',    model: 'gpt-4o-mini' },
-  'AG-06':   { provider: 'openai',    model: 'gpt-4o' },
-  'AG-07':   { provider: 'openai',    model: 'gpt-4o-mini' },
+  'AG-TERM': { provider: 'openrouter', model: 'openrouter/free' },
+  'AG-00':   { provider: 'openrouter', model: 'openrouter/free' },
+  'AG-01':   { provider: 'openrouter', model: 'openrouter/free' },
+  'AG-02':   { provider: 'openrouter', model: 'openrouter/free' },
+  'AG-03':   { provider: 'openrouter', model: 'openrouter/free' },
+  'AG-04':   { provider: 'fal',        model: 'fal-ai/flux/schnell' },
+  'AG-05':   { provider: 'openrouter', model: 'openrouter/free' },
+  'AG-06':   { provider: 'openrouter', model: 'openrouter/free' },
+  'AG-07':   { provider: 'openrouter', model: 'openrouter/free' },
 };
 
 // ── Overrides en runtime — cargados desde DB al inicio ────────

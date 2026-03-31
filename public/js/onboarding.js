@@ -262,12 +262,13 @@
      PHASE 1 — WELCOME
   ══════════════════════════════════════════════════════ */
   const ASCII = [
-    '┌─────────────────────────────────────────┐',
-    '│                                         │',
-    '│   ▶  P I P E L I N E    v 1 . 0       │',
-    '│      A g e n t   C a n v a s           │',
-    '│                                         │',
-    '└─────────────────────────────────────────┘',
+    '██████╗ ██╗██████╗ ███████╗██╗     ██╗███╗   ██╗███████╗',
+    '██╔══██╗██║██╔══██╗██╔════╝██║     ██║████╗  ██║██╔════╝',
+    '██████╔╝██║██████╔╝█████╗  ██║     ██║██╔██╗ ██║█████╗  ',
+    '██╔═══╝ ██║██╔═══╝ ██╔══╝  ██║     ██║██║╚██╗██║██╔══╝  ',
+    '██║     ██║██║     ███████╗███████╗██║██║ ╚████║███████╗',
+    '╚═╝     ╚═╝╚═╝     ╚══════╝╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝',
+    '                                          total-time.app',
   ];
 
   const INIT_SEQ = [
@@ -948,6 +949,7 @@
       setBadgeLive();
       setLiveTab();
       $('log-inputrow').style.display = 'none';
+      const qb = $('log-quickbtns'); if (qb) qb.style.display = 'none';
       mountObody();
       runWelcome();
     }, 680);
@@ -971,11 +973,13 @@
     setTimeout(() => {
       const inp = $('log-inputrow');
       if (inp) inp.style.display = '';
+      const qb = $('log-quickbtns'); if (qb) qb.style.display = '';
     }, 520);
   }
 
   /* ── public API ─────────────────────────────────────── */
   window._ob = {
+    isActive() { return _active; },
     skip()   { markDone(); endOnboarding(); },
     finish() { markDone(); endOnboarding(); },
     next() {

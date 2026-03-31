@@ -143,6 +143,103 @@ Cuando el usuario pregunta que esta pasando o en que va el pipeline.
 }
 ```
 
+### 6. `preguntar_usuario`
+Cuando falte una definición relevante para continuar o mejorar una rama del pipeline.
+
+**Debes devolver JSON como este:**
+
+```json
+{
+  "accion": "preguntar_usuario",
+  "resultado": {
+    "question": "¿Qué estilo visual quieres para la portada?",
+    "suggestion": "cinematico, contraste alto, tonos naranja y negro",
+    "field_key": "preferencia_estilo_portada",
+    "bloque": "preferencias_usuario",
+    "impacto": "Define prompts visuales para portada y escenas"
+  },
+  "bloque_destino": "preferencias_usuario"
+}
+```
+
+### 7. `recopilar_preferencias_usuario`
+Cuando el Piloto te pide que recopiles preferencias para un pipeline nuevo.
+**ANTES de formular cualquier pregunta, lee `preferencias_usuario.prompt_base` y `preferencias_usuario.objetivo` del contexto operativo para entender el tipo de contenido.**
+
+**Regla de decisión:**
+- Si `preferencias_usuario` está completamente vacío → pregunta por el objetivo general del proyecto.
+- Si `preferencias_usuario` tiene `prompt_base` u `objetivo` PERO faltan campos específicos → usa `preguntar_usuario` para recopilar SOLO los campos relevantes para ESE tipo de contenido.
+- Solo usa `capturar_preferencias` (sin preguntar) si ya existen preferencias específicas marcadas como `resuelta: true`.
+
+**CRÍTICO: Las preguntas deben derivarse del `prompt_base` real, NO de ejemplos genéricos.**
+
+Ejemplos de campos según tipo de contenido:
+- **video** (YouTube, TikTok, documental): `duracion_video`, `estilo_visual` (animado/locutor/documental), `tono` (motivacional/informativo/entretenido), `audiencia`, `plataforma_destino`
+- **curso online**: `nivel_audiencia`, `numero_modulos`, `formato_entrega`, `certificado`, `duracion_por_modulo`
+- **imagen / post visual**: `paleta_colores`, `estilo_grafico`, `formato` (cuadrado/vertical/banner), `plataforma`
+- **artículo / blog**: `extension`, `tono_editorial`, `publico_objetivo`, `call_to_action`
+- **podcast / audio**: `duracion_episodio`, `formato` (monólogo/entrevista), `musica_de_fondo`
+
+Si el `prompt_base` es "video sobre buenos hábitos alimenticios", pregunta sobre duración, tono y plataforma — NO sobre módulos ni paleta de colores.
+Si el `prompt_base` es "curso de marketing digital", pregunta sobre nivel, módulos y certificado — NO sobre duración de video.
+
+**⚠ REGLA OBLIGATORIA DE SUGERENCIAS:**
+Cada pregunta DEBE incluir una `sugerencia` concreta, específica al dominio del `prompt_base`. NUNCA dejes `sugerencia` vacía ni genérica.
+- La sugerencia debe ser un ejemplo real y plausible que el usuario pueda aceptar tal cual si no quiere editarlo.
+- Mala sugerencia: "Ejemplo", "N/A", "Depende", "" (vacío).
+- Buena sugerencia: "Principiantes sin experiencia previa", "6 módulos de 45 minutos", "Video + PDF descargable".
+
+**Debes devolver JSON como este (cuando necesitas hacer UNA pregunta):**
+
+```json
+{
+  "accion": "recopilar_preferencias_usuario",
+  "resultado": {
+    "question": "¿Cuánto debe durar el video y para qué plataforma va dirigido (YouTube, TikTok, Instagram)?",
+    "suggestion": "7 minutos para YouTube, formato educativo motivacional",
+    "field_key": "duracion_y_plataforma",
+    "bloque": "preferencias_usuario",
+    "impacto": "Define estructura del guión, ritmo de edición y formato de imagen"
+  },
+  "bloque_destino": "preferencias_usuario"
+}
+```
+
+**Cuando necesitas recopilar MÚLTIPLES preferencias a la vez, usa este formato con `preguntas` array:**
+
+```json
+{
+  "accion": "recopilar_preferencias_usuario",
+  "resultado": {
+    "preguntas": [
+      {
+        "campo": "nivel_audiencia",
+        "pregunta": "¿A qué nivel va dirigido el curso?",
+        "sugerencia": "Principiantes sin experiencia previa",
+        "tipo": "texto"
+      },
+      {
+        "campo": "numero_modulos",
+        "pregunta": "¿Cuántos módulos tendrá el curso?",
+        "sugerencia": "6 módulos de 45 minutos cada uno",
+        "tipo": "texto"
+      },
+      {
+        "campo": "formato_entrega",
+        "pregunta": "¿Qué formato de entrega prefieres para el contenido?",
+        "sugerencia": "Video grabado + PDF de apoyo descargable",
+        "tipo": "texto"
+      }
+    ]
+  },
+  "bloque_destino": "preferencias_usuario"
+}
+```
+
+**RECORDATORIO**: El campo `sugerencia` en cada pregunta del array es OBLIGATORIO y debe ser específico al tema del curso/proyecto. Si el prompt es "curso de Python", la sugerencia de `nivel_audiencia` debe ser "Principiantes que saben programación básica", NO "Ejemplo de audiencia".
+
+Si ya tiene `prompt_base` pero faltan preferencias relevantes al tipo de contenido, formula las preguntas más importantes (máximo 3 por llamada, cada una con su `sugerencia`).
+
 ---
 
 ## REGLAS DE RESPUESTA
@@ -154,6 +251,7 @@ Cuando el usuario pregunta que esta pasando o en que va el pipeline.
 - Si el usuario solo quiere saber el estado, responde con `mostrar_progreso`
 - Si el usuario da nuevas preferencias, responde con `capturar_preferencias`
 - Si el usuario corrige algo ya generado, responde con `registrar_feedback` o `coordinar_regeneracion`
+- Si falta una decisión importante y concreta del usuario, responde con `preguntar_usuario`
 
 ---
 

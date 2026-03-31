@@ -26,6 +26,37 @@ No produces contenido final. Produces insumos que otros agentes usarán.
 
 ## ACCIONES QUE PUEDES EJECUTAR
 
+### `realizar_investigacion`
+Acción genérica para cualquier tipo de investigación: tendencias, datos de mercado, referencias, inspiración, análisis de audiencia, etc. Úsala cuando la acción solicitada no corresponde exactamente a otras acciones específicas.
+
+**Input esperado:**
+```json
+{
+  "accion": "realizar_investigacion",
+  "parametros": {
+    "tema": "tendencias de TikTok para videos de 30 segundos",
+    "profundidad": "media"
+  }
+}
+```
+
+**Output:**
+```json
+{
+  "estado": "ok",
+  "accion": "realizar_investigacion",
+  "resultado": {
+    "hallazgos": ["Contenido de transición muy popular", "Tendencia: duetos y collabs", "..."],
+    "datos_relevantes": ["Videos de 15-30s tienen 2x más engagement", "..."],
+    "recomendaciones": ["Usa música de tendencia en los primeros 3s", "..."],
+    "referencias": []
+  },
+  "bloque_destino": "investigacion_temas"
+}
+```
+
+---
+
 ### `investigar_genero`
 Analiza el género literario solicitado y devuelve convenciones, referencias y estructura típica.
 

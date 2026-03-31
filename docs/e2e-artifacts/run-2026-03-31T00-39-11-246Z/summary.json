@@ -1,0 +1,36 @@
+{
+  "startedAt": "2026-03-31T00:39:11.246Z",
+  "baseUrl": "http://localhost:3000",
+  "prompt": "curso online completo",
+  "pipelineId": "25236dc5-968b-48e8-94e4-b4a438cdd85e",
+  "pipelineName": "E2E curso online completo 1774917552221",
+  "prepareOk": false,
+  "startOk": false,
+  "browserErrors": [],
+  "pageErrors": [],
+  "requestFailures": [],
+  "events": [],
+  "questions": [],
+  "answers": [],
+  "screenshots": [],
+  "assertions": [
+    {
+      "label": "pipeline created",
+      "ok": true,
+      "status": 201,
+      "data": {
+        "id": "25236dc5-968b-48e8-94e4-b4a438cdd85e",
+        "name": "E2E curso online completo 1774917552221",
+        "created_at": "2026-03-31 00:39:12",
+        "updated_at": "2026-03-31 00:39:12",
+        "hash_id": "6ead88a9-1b25-4423-9fd0-b1ca7acacbcd"
+      }
+    },
+    {
+      "label": "pipeline prepared",
+      "ok": false,
+      "status": 409
+    }
+  ],
+  "finishedAt": "2026-03-31T00:39:15.557Z"
+}

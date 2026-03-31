@@ -6,17 +6,20 @@
 
 const fs = require('fs');
 const path = require('path');
-const { callLLM, callFal, isTextReady, isMediaReady, isAnthropicReady, isGoogleReady, isOpenAIReady } = require('./llm-clients');
+const { callLLM, callFal, callVeo, isTextReady, isMediaReady, isVeoReady, isAnthropicReady, isGoogleReady, isOpenAIReady, isOpenRouterReady } = require('./llm-clients');
 const { getAgentModel } = require('./models');
 const pipelineConfig = require('./system_prompt/pipeline_config.json');
 const skills = require('./skills');
 
 // ── Provider fallback chain ────────────────────────────────────
 const FALLBACK_MODELS = {
+  openrouter: 'openrouter/free',
   openai:    'gpt-4o-mini',
-  anthropic: 'claude-haiku-4-5-20251001',
+  anthropic: 'claude-haiku-4-5-20251001', // only used if explicitly configured
   google:    'gemini-2.0-flash',
 };
+
+const FAST_RUNTIME_MODELS = {}; // No hardcoded fast models — use models.js defaults
 
 function isQuotaError(err) {
   const m = err?.message || '';
@@ -25,8 +28,10 @@ function isQuotaError(err) {
 }
 
 function getAvailableProviders(preferred) {
-  const all = ['openai','anthropic','google'];
+  // Priority order: openrouter (free) first, then google, then openai, then anthropic
+  const all = ['openrouter','google','openai','anthropic'];
   const avail = all.filter(p => {
+    if (p === 'openrouter') return isOpenRouterReady();
     if (p === 'anthropic') return isAnthropicReady();
     if (p === 'google')    return isGoogleReady();
     if (p === 'openai')    return isOpenAIReady();
@@ -43,6 +48,7 @@ async function callLLMWithFallback(agentId, preferredProvider, preferredModel, s
     const model = provider === preferredProvider ? preferredModel : FALLBACK_MODELS[provider];
     if (!model) continue;
     try {
+      if (typeof opts.onModelResolved === 'function') opts.onModelResolved({ provider, model, agentId, fallback: provider !== preferredProvider });
       return await callLLM(provider, model, systemPrompt, messages, { ...opts, agentId });
     } catch (err) {
       lastErr = err;
@@ -76,7 +82,8 @@ const SPECIALIST_AGENTS = new Set(['AG-03', 'AG-04', 'AG-06', 'AG-07']);
 const FAL_MODELS = {
   image:       'fal-ai/flux/schnell',
   image_quality:'fal-ai/flux-pro',
-  video:       'fal-ai/kling-video/v1.6/standard/text-to-video',
+  video:       process.env.FAL_VIDEO_TEXT_MODEL || 'fal-ai/minimax-video/text-to-video',
+  video_img2vid: process.env.FAL_VIDEO_IMAGE_MODEL || 'fal-ai/veo3.1/fast/image-to-video',
   audio_tts:   'fal-ai/playai-tts',
 };
 
@@ -105,16 +112,78 @@ async function runAgent(agentId, userInput, context = {}, opts = {}) {
 
   // AG-04: LLM construye el prompt visual → fal.ai genera la imagen
   if (MEDIA_AGENTS.has(agentId)) {
-    return runMediaAgent(agentId, systemPrompt, messages);
+    return runMediaAgent(agentId, systemPrompt, messages, opts);
   }
 
   if (!isTextReady()) throw new Error('No LLM available — check API keys');
 
   // Obtener modelo configurado para este agente
-  const { provider, model } = getAgentModel(agentId);
-  console.log(`[agent-runner] ${agentId} → ${provider}/${model}`);
+  const configuredModel = getAgentModel(agentId);
+  const runtimeOverride = opts.pipelineId ? FAST_RUNTIME_MODELS[agentId] : null;
+  const provider = runtimeOverride?.provider || configuredModel.provider;
+  const model = runtimeOverride?.model || configuredModel.model;
+  console.log(`[agent-runner] ${agentId} → ${provider}/${model}${runtimeOverride ? ' (runtime-fast)' : ''}`);
 
-  const response = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages, { stream: opts.stream });
+  // Budget gate — checks tier + remaining BP before calling the LLM
+  if (opts.pipelineId) {
+    const { checkBudget } = require('./budget');
+    checkBudget(opts.pipelineId, provider, model);
+  }
+
+  // ── Streaming mode (onChunk callback) ──────────────────────────
+  if (opts.onChunk && typeof opts.onChunk === 'function') {
+    let fullText = '';
+    try {
+      const stream = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages, {
+        stream: true,
+        pipelineId: opts.pipelineId,
+        onModelResolved: opts.onModelResolved,
+        maxTokens: agentId === 'AG-07' ? 16384 : undefined,
+      });
+      for await (const chunk of stream) {
+        // OpenAI / OpenRouter format
+        const openaiDelta = chunk.choices?.[0]?.delta?.content;
+        // Anthropic format
+        const anthropicDelta = chunk.type === 'content_block_delta' ? (chunk.delta?.text || '') : '';
+        const delta = (typeof openaiDelta === 'string' ? openaiDelta : '') || anthropicDelta;
+        if (delta) { fullText += delta; opts.onChunk(delta, fullText); }
+      }
+    } catch (streamErr) {
+      // Stream failed — if we have some text already use it; else fall through to normal call
+      if (!fullText) {
+        console.warn(`[agent-runner] ${agentId} stream failed (${streamErr.message?.slice(0, 80)}) — retrying without stream`);
+        const response = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages, {
+          pipelineId: opts.pipelineId,
+          onModelResolved: opts.onModelResolved,
+          maxTokens: agentId === 'AG-07' ? 16384 : undefined,
+        });
+        const skillResults = await skills.executeSkillsInResponse(response, opts.pipelineId);
+        if (skillResults?.length) {
+          const skillContext = `\n\n--- RESULTADOS DE SKILLS ---\n${JSON.stringify(skillResults, null, 2)}\n--- FIN RESULTADOS ---`;
+          const messages2 = [...messages, { role: 'assistant', content: response }, { role: 'user', content: skillContext }];
+          const postSkillResponse = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages2, { pipelineId: opts.pipelineId });
+          return SPECIALIST_AGENTS.has(agentId) ? normalizeSpecialistResponse(agentId, postSkillResponse, userInput) : postSkillResponse;
+        }
+        return SPECIALIST_AGENTS.has(agentId) ? normalizeSpecialistResponse(agentId, response, userInput) : response;
+      }
+    }
+    const skillResults = await skills.executeSkillsInResponse(fullText, opts.pipelineId);
+    if (skillResults?.length) {
+      const skillContext = `\n\n--- RESULTADOS DE SKILLS ---\n${JSON.stringify(skillResults, null, 2)}\n--- FIN RESULTADOS ---`;
+      const messages2 = [...messages, { role: 'assistant', content: fullText }, { role: 'user', content: skillContext }];
+      const postSkillResponse = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages2, { pipelineId: opts.pipelineId });
+      return SPECIALIST_AGENTS.has(agentId) ? normalizeSpecialistResponse(agentId, postSkillResponse, userInput) : postSkillResponse;
+    }
+    return SPECIALIST_AGENTS.has(agentId) ? normalizeSpecialistResponse(agentId, fullText, userInput) : fullText;
+  }
+  // ── Non-streaming mode ──────────────────────────────────────────
+
+  const response = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages, {
+    stream: opts.stream,
+    pipelineId: opts.pipelineId,
+    onModelResolved: opts.onModelResolved,
+    maxTokens: agentId === 'AG-07' ? 16384 : undefined,
+  });
   if (opts.stream) return response;
 
   // Detectar y ejecutar skills en la respuesta
@@ -122,7 +191,10 @@ async function runAgent(agentId, userInput, context = {}, opts = {}) {
   if (skillResults?.length) {
     const skillContext = `\n\n--- RESULTADOS DE SKILLS ---\n${JSON.stringify(skillResults, null, 2)}\n--- FIN RESULTADOS ---`;
     const messages2 = [...messages, { role: 'assistant', content: response }, { role: 'user', content: skillContext }];
-    const postSkillResponse = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages2);
+    const postSkillResponse = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages2, {
+      pipelineId: opts.pipelineId,
+      onModelResolved: opts.onModelResolved,
+    });
     return SPECIALIST_AGENTS.has(agentId)
       ? normalizeSpecialistResponse(agentId, postSkillResponse, userInput)
       : postSkillResponse;
@@ -133,14 +205,136 @@ async function runAgent(agentId, userInput, context = {}, opts = {}) {
     : response;
 }
 
-async function runMediaAgent(agentId, systemPrompt, messages) {
-  if (!isTextReady())  throw new Error('LLM required for media prompt building');
-  if (!isMediaReady()) throw new Error('FAL_KEY required for image generation');
+// VIDEO_PROVIDER=veo  → use Google Veo 3 for video generation
+// VIDEO_PROVIDER=fal  → use fal.ai KLING (default / fallback)
+const VIDEO_PROVIDER = (process.env.VIDEO_PROVIDER || 'fal').toLowerCase();
+
+// Veo generation config (can be overridden via env)
+const VEO_CONFIG = {
+  durationSeconds: parseInt(process.env.VEO_DURATION_SECONDS || '8', 10),
+  aspectRatio:     process.env.VEO_ASPECT_RATIO || '16:9',
+  includeAudio:    process.env.VEO_INCLUDE_AUDIO !== 'false',
+};
+
+// ── Video fallback chain (fal.ai models, tried in order) ───────
+const VIDEO_FAL_FALLBACKS = [
+  { model: process.env.FAL_VIDEO_TEXT_MODEL || 'fal-ai/minimax-video/text-to-video', params: { prompt_optimizer: true } },
+  { model: 'fal-ai/kling-video/v1.6/standard/text-to-video', params: { duration: '5', aspect_ratio: '16:9' } },
+  { model: 'fal-ai/minimax-video/text-to-video',              params: { prompt_optimizer: true } },
+  { model: 'fal-ai/luma-dream-machine/text-to-video',         params: { duration: '5s', aspect_ratio: '16:9' } },
+  { model: 'fal-ai/runway-gen3/turbo/text-to-video',          params: { duration: 5, ratio: '1280:720' } },
+];
+
+// ── Download remote video to public/uploads/ ───────────────────
+async function downloadVideoToUploads(remoteUrl, prefix = 'vid') {
+  try {
+    const res = await fetch(remoteUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const ext = remoteUrl.includes('.mp4') ? 'mp4' : 'mp4';
+    const filename = `${prefix}_${Date.now()}.${ext}`;
+    const uploadDir = path.join(__dirname, 'public', 'uploads');
+    fs.mkdirSync(uploadDir, { recursive: true });
+    fs.writeFileSync(path.join(uploadDir, filename), buf);
+    const localUrl = `/uploads/${filename}`;
+    console.log(`[agent-runner] video descargado → ${localUrl} (${(buf.length/1024/1024).toFixed(1)}MB)`);
+    return localUrl;
+  } catch (e) {
+    console.warn(`[agent-runner] descarga fallida (${remoteUrl.slice(0,60)}…): ${e.message}`);
+    return remoteUrl; // return original if download fails
+  }
+}
+
+// ── Download remote image to public/uploads/ ───────────────────
+async function downloadImageToUploads(remoteUrl, prefix = 'img') {
+  try {
+    const res = await fetch(remoteUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const ext = /\.(png|webp|gif)(\?|$)/i.test(remoteUrl) ? remoteUrl.match(/\.(png|webp|gif)/i)[1] : 'jpg';
+    const filename = `${prefix}_${Date.now()}.${ext}`;
+    const uploadDir = path.join(__dirname, 'public', 'uploads');
+    fs.mkdirSync(uploadDir, { recursive: true });
+    fs.writeFileSync(path.join(uploadDir, filename), buf);
+    const localUrl = `/uploads/${filename}`;
+    console.log(`[agent-runner] imagen descargada → ${localUrl} (${(buf.length/1024).toFixed(0)}KB)`);
+    return localUrl;
+  } catch (e) {
+    console.warn(`[agent-runner] descarga imagen fallida (${remoteUrl.slice(0,60)}…): ${e.message}`);
+    return remoteUrl; // return original CDN URL if download fails
+  }
+}
+
+// ── Try fal.ai video models in order until one succeeds ────────
+async function callFalVideoWithFallback(prompt, imageUrl = null) {
+  // If an image URL is provided, prefer dedicated image-to-video first.
+  if (imageUrl) {
+    try {
+      console.log(`[agent-runner] intentando image-to-video con imagen de referencia → ${FAL_MODELS.video_img2vid}`);
+      const result = await callFal(FAL_MODELS.video_img2vid, {
+        prompt,
+        image_url: imageUrl,
+        duration: '5',
+        aspect_ratio: '16:9',
+      });
+      const url = result?.video?.url || result?.videos?.[0]?.url || result?.url || null;
+      if (url) {
+        console.log(`[agent-runner] image-to-video OK → ${FAL_MODELS.video_img2vid}`);
+        return { url, model: FAL_MODELS.video_img2vid };
+      }
+    } catch (err) {
+      console.warn(`[agent-runner] image-to-video falló: ${err.message?.slice(0, 100)} — usando text-to-video`);
+    }
+  }
+
+  for (const { model, params } of VIDEO_FAL_FALLBACKS) {
+    try {
+      console.log(`[agent-runner] intentando fal.ai video: ${model}`);
+      const result = await callFal(model, { prompt, ...params });
+      const url = result?.video?.url || result?.videos?.[0]?.url || result?.url || null;
+      if (url) {
+        console.log(`[agent-runner] fal.ai video OK → ${model}`);
+        return { url, model };
+      }
+    } catch (err) {
+      console.warn(`[agent-runner] fal.ai ${model} falló: ${err.message?.slice(0, 100)} — probando siguiente`);
+    }
+  }
+  throw new Error('Todos los modelos de video fal.ai fallaron');
+}
+
+async function runMediaAgent(agentId, systemPrompt, messages, opts = {}) {
+  if (!isTextReady()) throw new Error('LLM required for media prompt building');
+
+  // Detect if this is a video generation action from the user input
+  const userInput     = messages[0]?.content || '';
+  const action        = extractActionFromInput(userInput);
+  const bloqueDestino = extractExpectedBlock(userInput) || '';
+  // Only match clips_video in the explicit bloque_destino field, not anywhere in context JSON
+  const isVideoAction = /generar_video|video/i.test(action || '') || /^clips_video$/i.test(bloqueDestino.trim());
+
+  // For non-video (images) we always use fal.ai
+  if (!isVideoAction && !isMediaReady()) throw new Error('FAL_KEY required for image generation');
 
   const { provider, model } = getAgentModel(agentId);
-  const textProvider = provider.startsWith('fal') ? 'anthropic' : provider;
-  const textModel   = model.startsWith('fal-ai/') ? 'claude-haiku-4-5-20251001' : model;
-  const falModel    = model.startsWith('fal-ai/') ? model : FAL_MODELS.image;
+  const textProvider = provider.startsWith('fal') ? 'openai' : provider;
+  const textModel    = model.startsWith('fal-ai/') ? 'gpt-4o-mini' : model;
+  const falModel     = isVideoAction ? FAL_MODELS.video : (model.startsWith('fal-ai/') ? model : FAL_MODELS.image);
+
+  // Extract scene image URL injected by pilot-loop for image-to-video continuity
+  const sceneRefImageUrl = userInput.match(/IMAGEN DE REFERENCIA PARA ESTE CLIP[^\n]*\n([^\n]+)/)?.[1]?.trim() || null;
+
+  // Determine which video backend to use
+  const useVeo = isVideoAction && VIDEO_PROVIDER === 'veo' && isVeoReady();
+
+  if (typeof opts.onModelResolved === 'function') opts.onModelResolved({ provider: textProvider, model: textModel, agentId, media: false });
+  if (typeof opts.onMediaModelResolved === 'function') {
+    const mediaProvider = useVeo ? 'veo' : 'fal';
+    const mediaModel    = useVeo ? (process.env.VEO_MODEL || 'veo-3.0-generate-preview') : falModel;
+    opts.onMediaModelResolved({ provider: mediaProvider, model: mediaModel, agentId, media: true, isVideo: isVideoAction });
+  }
+
+  console.log(`[agent-runner] ${agentId} media: ${isVideoAction ? (useVeo ? 'VIDEO/Veo3' : 'VIDEO/KLING') : 'IMAGE/fal'}`);
 
   const llmResponse = await callLLM(textProvider, textModel, systemPrompt, messages);
 
@@ -151,33 +345,109 @@ async function runMediaAgent(agentId, systemPrompt, messages) {
     agentDecision = jsonMatch ? JSON.parse(jsonMatch[1]) : JSON.parse(llmResponse);
   } catch { /* no structured response */ }
 
-  let imagePrompt = agentDecision?.resultado?.prompt_usado;
+  let mediaPrompt = agentDecision?.resultado?.prompt_usado;
 
-  // Fallback: ask LLM directly for a short visual prompt
-  if (!imagePrompt || imagePrompt.trim().length < 15) {
+  // Fallback: ask LLM directly for a short visual/video prompt
+  if (!mediaPrompt || mediaPrompt.trim().length < 15) {
+    const promptType = isVideoAction ? 'short video scene' : 'visual image';
     const promptMessages = [
       ...messages,
       { role: 'assistant', content: llmResponse },
-      { role: 'user', content: 'Based on the context above, write ONLY a short visual image prompt in English (max 150 words, no JSON, just the prompt describing the scene/image to generate):' },
+      { role: 'user', content: `Based on the context above, write ONLY a short ${promptType} prompt in English (max 150 words, no JSON, just the prompt describing the scene to generate):` },
     ];
-    imagePrompt = await callLLM(textProvider, textModel, systemPrompt, promptMessages);
-    imagePrompt = imagePrompt.replace(/^["']|["']$/g, '').trim().slice(0, 400);
-    console.log(`[agent-runner] ${agentId} fallback prompt extracted (${imagePrompt.length} chars)`);
+    mediaPrompt = await callLLM(textProvider, textModel, systemPrompt, promptMessages);
+    mediaPrompt = mediaPrompt.replace(/^["']|["']$/g, '').trim().slice(0, 400);
+    console.log(`[agent-runner] ${agentId} fallback prompt extracted (${mediaPrompt.length} chars)`);
   }
 
-  const falResult = await callFal(falModel, {
-    prompt: imagePrompt,
-    image_size: 'portrait_4_3',
-    num_inference_steps: 4,
-    num_images: 1,
-  });
+  let mediaUrl     = null;
+  let sceneImgUrl  = null;  // scene thumbnail generated alongside Veo video
+  let usedModel    = null;
 
-  const imageUrl = falResult?.images?.[0]?.url || falResult?.image?.url;
-  const result = agentDecision || { resultado: {} };
+  if (isVideoAction) {
+    if (useVeo) {
+      // ── Veo 3 → fal.ai fallback chain + scene image in parallel ─
+      console.log(`[agent-runner] ${agentId} launching Veo3 + scene image in parallel`);
+      const sceneImgPrompt = `Cinematic still frame, photorealistic scene thumbnail: ${mediaPrompt.slice(0, 250)}`;
+      const [veoResult, imgResult] = await Promise.allSettled([
+        callVeo(mediaPrompt, VEO_CONFIG),
+        isMediaReady()
+          ? callFal(FAL_MODELS.image, { prompt: sceneImgPrompt, image_size: 'landscape_16_9', num_inference_steps: 4, num_images: 1 })
+          : Promise.resolve(null),
+      ]);
+
+      if (veoResult.status === 'fulfilled') {
+        mediaUrl  = veoResult.value?.video?.url || null;   // already local /uploads/ from callVeo
+        usedModel = process.env.VEO_MODEL || 'veo-3.0-generate-001';
+      } else {
+        const veoErr = veoResult.reason?.message || '';
+        const isBilling = veoErr.includes('billing') || veoErr.includes('GCP') || veoErr.includes('400') || veoErr.includes('quota');
+        console.error(`[agent-runner] ${agentId} Veo ${isBilling ? 'BILLING_REQUIRED' : 'ERROR'}:`, veoErr.slice(0, 150));
+        // Fallback → full fal.ai chain (KLING img2vid → KLING t2v → MiniMax → Luma → Runway)
+        if (isMediaReady()) {
+          const { url: falUrl, model: falUsed } = await callFalVideoWithFallback(mediaPrompt, sceneRefImageUrl);
+          mediaUrl  = await downloadVideoToUploads(falUrl, 'vid');
+          usedModel = falUsed + ' (veo-fallback)';
+        }
+      }
+
+      if (imgResult.status === 'fulfilled' && imgResult.value) {
+        const rawSceneUrl = imgResult.value?.images?.[0]?.url || imgResult.value?.image?.url || null;
+        if (rawSceneUrl) {
+          sceneImgUrl = await downloadImageToUploads(rawSceneUrl, 'scene');
+        }
+        console.log(`[agent-runner] ${agentId} scene image → ${sceneImgUrl ? 'OK' : 'NONE'}`);
+      }
+    } else {
+      // ── fal.ai fallback chain (default, no Veo) ────────────────
+      // Try KLING image-to-video first if a reference image is available
+      if (!isMediaReady()) throw new Error('FAL_KEY required for video generation');
+      if (sceneRefImageUrl) {
+        console.log(`[agent-runner] ${agentId} usando imagen de referencia para continuidad visual: ${sceneRefImageUrl.slice(0, 80)}`);
+      }
+      const { url: falUrl, model: falUsed } = await callFalVideoWithFallback(mediaPrompt, sceneRefImageUrl);
+      mediaUrl  = await downloadVideoToUploads(falUrl, 'vid');
+      usedModel = falUsed;
+    }
+  } else {
+    // ── Image via fal.ai ───────────────────────────────────────
+    const falResult = await callFal(falModel, {
+      prompt: mediaPrompt,
+      image_size: 'portrait_4_3',
+      num_inference_steps: 4,
+      num_images: 1,
+    });
+    const remoteImgUrl = falResult?.images?.[0]?.url || falResult?.image?.url || null;
+    usedModel = falModel;
+    if (!remoteImgUrl) {
+      console.warn(`[agent-runner] ${agentId} fal.ai no devolvió URL de imagen. Respuesta:`, JSON.stringify(falResult)?.slice(0, 200));
+      mediaUrl = null;
+    } else {
+      // Save image locally to public/uploads/
+      mediaUrl = await downloadImageToUploads(remoteImgUrl, 'img');
+    }
+  }
+
+  const result      = agentDecision || { resultado: {} };
+  const outputKey   = isVideoAction ? 'video_url' : 'imagen_url';
+  const providerKey = useVeo ? 'veo_model' : 'fal_model';
+  const success     = !!mediaUrl;
 
   return normalizeSpecialistResponse(agentId, JSON.stringify({
     ...result,
-    resultado: { ...result.resultado, prompt_usado: imagePrompt, imagen_url: imageUrl, fal_model: falModel },
+    estado: success ? 'ok' : 'error',
+    error:  success ? null : `${useVeo ? 'Veo' : 'fal.ai'} no devolvió URL de ${isVideoAction ? 'video' : 'imagen'}`,
+    resultado: {
+      ...result.resultado,
+      prompt_usado:        mediaPrompt,
+      [outputKey]:         mediaUrl,
+      imagen_url:          isVideoAction ? sceneImgUrl : mediaUrl,
+      video_url:           isVideoAction ? mediaUrl : null,
+      escena_img_url:      sceneImgUrl,    // thumbnail/scene frame alongside the video
+      imagen_referencia:   isVideoAction ? (sceneRefImageUrl || null) : null,  // image used as first frame
+      [providerKey]:       usedModel,
+      tipo_media:          isVideoAction ? 'video' : 'imagen',
+    },
   }, null, 2));
 }
 
@@ -251,11 +521,12 @@ function buildAssetFromResult(agentId, parsed = {}) {
   const resultado = parsed.resultado || {};
   const bloque = parsed.bloque_destino || null;
   if (agentId === 'AG-04') {
+    const isVideo = resultado.tipo_media === 'video' || !!resultado.video_url;
     return {
-      tipo_asset: 'imagen',
+      tipo_asset: isVideo ? 'video' : 'imagen',
       bloque,
       prompt: resultado.prompt_usado || resultado.prompt_nuevo || null,
-      contenido: resultado.imagen_url || null,
+      contenido: resultado.video_url || resultado.imagen_url || null,
       metadata: resultado,
     };
   }

@@ -11,6 +11,7 @@ const contextManager = require('../context-manager');
 const { stopLoop, pipelineEvents } = require('../pilot-loop');
 const db = require('../db');
 const { randomUUID } = require('crypto');
+const MAX_OPERATOR_QUESTIONS = 6;
 
 // ── Comandos del sistema (sin LLM) ─────────────────────────────
 const SYSTEM_COMMANDS = {
@@ -21,14 +22,24 @@ const SYSTEM_COMMANDS = {
   '/skills': cmdSkills,
   '/context': cmdContext,
   '/logs': cmdLogs,
+  '/approve': cmdApprove,
+  '/answer': cmdAnswer,
   '/reset': cmdReset,
   '/cancel': cmdCancel,
 };
 
 // ── GET /api/terminal/stream  (SSE) ────────────────────────────
 router.get('/stream', (req, res) => {
-  const { pipeline_id } = req.query;
+  const { pipeline_id, hash } = req.query;
   if (!pipeline_id) return res.status(400).json({ error: 'pipeline_id required' });
+
+  // Validate hash if provided (non-blocking — just logs unknown hashes)
+  if (hash) {
+    const row = db.getHash.get(hash);
+    if (!row || !row.is_active) {
+      return res.status(403).json({ error: 'hash_invalid' });
+    }
+  }
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -66,12 +77,18 @@ router.get('/stream', (req, res) => {
     pipeline_tick:     d => { if (d.pipeline_id === pipeline_id) send('pipeline_tick', d); },
     agent_started:     d => { if (d.pipeline_id === pipeline_id) send('agent_started', d); },
     agent_updated:     d => { if (d.pipeline_id === pipeline_id) send('agent_updated', d); },
+    agent_stream:      d => { if (d.pipeline_id === pipeline_id) send('agent_stream', d); },
     agent_paused:      d => { if (d.pipeline_id === pipeline_id) send('agent_paused', d); },
     asset_ready:       d => { if (d.pipeline_id === pipeline_id) send('asset_ready', d); },
+    output_ready:      d => { if (d.pipeline_id === pipeline_id) send('output_ready', d); },
+    operator_question_created: d => { if (d.pipeline_id === pipeline_id) send('operator_question_created', d); },
+    operator_question_answered: d => { if (d.pipeline_id === pipeline_id) send('operator_question_answered', d); },
     assembly_ready:    d => { if (d.pipeline_id === pipeline_id) send('assembly_ready', d); },
     pipeline_completed:d => { if (d.pipeline_id === pipeline_id) send('pipeline_completed', d); },
     pipeline_stopped:  d => { if (d.pipeline_id === pipeline_id) send('pipeline_stopped', d); },
     pipeline_corrupted:d => { if (d.pipeline_id === pipeline_id) send('pipeline_corrupted', d); },
+    budget_update:     d => { if (d.pipeline_id === pipeline_id) send('budget_update', d); },
+    budget_exceeded:   d => { if (d.pipeline_id === pipeline_id) send('budget_exceeded', d); },
   };
 
   for (const [event, handler] of Object.entries(handlers)) {
@@ -117,6 +134,10 @@ router.post('/', async (req, res, next) => {
       const ctx = contextManager.getContext(pipeline_id);
       if (ctx?.arquitecto?.esperando_respuesta) {
         return res.json(await routeBackToArquitecto(trimmed, pipeline_id, ctx));
+      }
+      const pendingQuestions = getPendingOperatorQuestions(pipeline_id, ctx);
+      if (pendingQuestions.length) {
+        return res.json(await routeToPendingQuestion(trimmed, pipeline_id, ctx, pendingQuestions[0]));
       }
       if (ctx && !ctx?.arquitecto?.esperando_respuesta) {
         return res.json(await routeToEditor(trimmed, pipeline_id, ctx));
@@ -204,24 +225,25 @@ async function handleClassification(classification, originalInput, pipelineId) {
 async function routeToArquitecto(input, messages, existingPipelineId) {
   messages.push({ source: 'TERMINAL', text: '[TERMINAL] → Activando AG-00 ARQUITECTO...' });
 
-  // Reusar pipeline existente si hay uno activo; si no, crear uno nuevo
-  let pipelineId = existingPipelineId;
+  // La terminal siempre crea un pipeline nuevo y limpio.
+  let pipelineId = null;
   const pipelineName = input.slice(0, 60);
 
-  if (!pipelineId) {
-    pipelineId = randomUUID();
-    db.insertPipeline.run(pipelineId, pipelineName);
-  } else {
-    db.updatePipeline.run(pipelineName, pipelineId);
-  }
+  pipelineId = randomUUID();
+  db.insertPipeline.run(pipelineId, pipelineName);
 
   contextManager.initContext(pipelineId, pipelineName);
-  contextManager.setEstado(pipelineId, 'en_progreso');
+  contextManager.recordEvent(pipelineId, {
+    tipo: 'pipeline_created_from_terminal',
+    fuente: 'TERMINAL',
+    mensaje: 'Pipeline creado desde prompt semilla. AG-00 preparará contexto y estructura antes de ejecutar.',
+    payload: { pipelineId, prompt_semilla: input },
+  });
 
   // Pedir al Arquitecto que genere los JSON DIRECTAMENTE sin preguntas previas
   const directPrompt = `${input}
 
-INSTRUCCIÓN PRIORITARIA: Genera ahora mismo los dos archivos JSON (seed_template y agent_menu) sin hacer preguntas previas. Usa asunciones razonables. El Editor recopilará los detalles del usuario durante la ejecución. Entrega los bloques \`\`\`json directamente.`;
+INSTRUCCIÓN PRIORITARIA: Genera ahora mismo los dos archivos JSON (seed_template y agent_menu) sin hacer preguntas previas. Usa asunciones razonables. El Operador recopilará los detalles del usuario durante la ejecución. Entrega los bloques \`\`\`json directamente.`;
 
   const arquitectoResponse = await runAgent('AG-00', directPrompt, {});
   messages.push({ source: 'AG-00', text: arquitectoResponse });
@@ -229,8 +251,16 @@ INSTRUCCIÓN PRIORITARIA: Genera ahora mismo los dos archivos JSON (seed_templat
   // Extraer y guardar la semilla
   const seedSaved = trySaveSeedFromResponse(pipelineId, arquitectoResponse);
 
-  if (!seedSaved) {
-    // AG-00 hizo preguntas — guardar historial para retomar en el próximo mensaje
+  if (seedSaved) {
+    contextManager.setEstado(pipelineId, 'preparado');
+    contextManager.recordEvent(pipelineId, {
+      tipo: 'pipeline_prepared',
+      fuente: 'AG-00',
+      mensaje: 'AG-00 dejó el pipeline preparado. Falta pulsar Ejecutar para iniciar el loop operativo.',
+    });
+    messages.push({ source: 'TERMINAL', text: '[TERMINAL] Pipeline preparado. El contexto y la estructura inicial quedaron listos. Pulsa Ejecutar para iniciar el loop del Piloto.' });
+  } else {
+    contextManager.setEstado(pipelineId, 'iniciando');
     contextManager.patchContext(pipelineId, {
       arquitecto: {
         esperando_respuesta: true,
@@ -240,7 +270,7 @@ INSTRUCCIÓN PRIORITARIA: Genera ahora mismo los dos archivos JSON (seed_templat
         ],
       },
     });
-    messages.push({ source: 'TERMINAL', text: '[TERMINAL] AG-00 necesita más información. Responde las preguntas y el canvas se construirá automáticamente.' });
+    messages.push({ source: 'TERMINAL', text: '[TERMINAL] AG-00 no pudo dejar la estructura lista en este intento. Responde para completar la preparación del pipeline.' });
   }
 
   return { messages, category: 'CREAR_PIPELINE', pipeline_id: pipelineId, seed_ready: seedSaved };
@@ -267,6 +297,14 @@ async function routeBackToArquitecto(input, pipelineId, ctx) {
       historial: seedSaved ? [] : newHistorial,
     },
   });
+  if (seedSaved) {
+    contextManager.setEstado(pipelineId, 'preparado');
+    contextManager.recordEvent(pipelineId, {
+      tipo: 'pipeline_prepared',
+      fuente: 'AG-00',
+      mensaje: 'AG-00 completó la estructura tras feedback adicional.',
+    });
+  }
 
   return {
     messages: [{ source: 'AG-00', text: response }],
@@ -291,7 +329,7 @@ async function routeToEditor(input, pipelineId, ctx) {
 
   const operatorInput = 'El usuario envio este mensaje durante la ejecucion activa del pipeline:\n\n' + input + '\n\nLee el contexto completo y responde en JSON operativo siguiendo tu system prompt.';
   const operatorResponse = await runAgent('AG-05', operatorInput, ctx, { pipelineId });
-  applyOperatorResponseToContext(pipelineId, operatorResponse);
+  const operatorResult = applyOperatorResponseToContext(pipelineId, operatorResponse);
 
   contextManager.upsertAgentState(pipelineId, 'AG-05', {
     estado: 'completado',
@@ -310,12 +348,34 @@ async function routeToEditor(input, pipelineId, ctx) {
     messages: [{ source: 'AG-05', text: operatorResponse }],
     category: 'FEEDBACK',
     pipeline_id: pipelineId,
+    operator_result: operatorResult,
+  };
+}
+
+async function routeToPendingQuestion(input, pipelineId, ctx, question) {
+  const answer = String(input || '').trim();
+  if (!answer) {
+    return {
+      messages: [{ source: 'TERMINAL', text: '[TERMINAL] No recibí respuesta para la pregunta pendiente.' }],
+      category: 'FEEDBACK',
+      pipeline_id: pipelineId,
+    };
+  }
+  const result = answerOperatorQuestion(pipelineId, question, answer, 'manual');
+  return {
+    messages: [{
+      source: 'TERMINAL',
+      text: `[TERMINAL] Respuesta registrada para: "${question.question}" → ${answer}`,
+    }],
+    category: 'FEEDBACK',
+    pipeline_id: pipelineId,
+    operator_result: result,
   };
 }
 
 function applyOperatorResponseToContext(pipelineId, rawResponse) {
   const parsed = parseJsonFromAgentResponse(rawResponse);
-  if (!parsed) return;
+  if (!parsed) return null;
 
   contextManager.recordEvent(pipelineId, {
     tipo: 'operator_response',
@@ -336,7 +396,182 @@ function applyOperatorResponseToContext(pipelineId, rawResponse) {
         ...patch,
       },
     });
-    return;
+    return { parsed, question: null };
+  }
+
+  const isOperatorQuestionAction = parsed.accion === 'preguntar_usuario' || parsed.accion === 'recopilar_preferencias';
+
+  if (isOperatorQuestionAction && parsed.resultado?.question) {
+    const current = contextManager.getContext(pipelineId);
+    const pendingQuestions = Array.isArray(current?.preguntas_pendientes) ? current.preguntas_pendientes : [];
+    const requestedFieldKey = parsed.resultado.field_key || parsed.resultado.fieldKey || null;
+    const existingPending = pendingQuestions.find(item =>
+      (requestedFieldKey && item.field_key === requestedFieldKey) ||
+      item.question === parsed.resultado.question
+    );
+
+    if (!existingPending && pendingQuestions.length >= MAX_OPERATOR_QUESTIONS) {
+      contextManager.recordEvent(pipelineId, {
+        tipo: 'operator_question_skipped_limit',
+        fuente: 'AG-05',
+        mensaje: 'AG-05 intentó crear una pregunta adicional pero ya existen 6 pendientes.',
+        payload: { max: MAX_OPERATOR_QUESTIONS, question: parsed.resultado.question },
+      });
+      return { parsed, question: null, skipped: 'question_limit_reached' };
+    }
+
+    const question = contextManager.upsertOperatorQuestion(pipelineId, {
+      public_id: existingPending?.public_id || undefined,
+      field_key: parsed.resultado.field_key || parsed.resultado.fieldKey || null,
+      question: parsed.resultado.question,
+      suggestion: parsed.resultado.suggestion || '',
+      status: 'pending',
+      metadata: {
+        bloque: parsed.resultado.bloque || parsed.bloque_destino || null,
+        impacto: parsed.resultado.impacto || null,
+        accion_operador: parsed.accion,
+      },
+    });
+    contextManager.patchContext(pipelineId, {
+      editor: {
+        esperando_input: true,
+        pregunta_activa: parsed.resultado.question,
+      },
+      preguntas_pendientes: mergePendingQuestions(
+        current?.preguntas_pendientes || [],
+        {
+          public_id: question.public_id,
+          question: question.question,
+          field_key: parsed.resultado.field_key || parsed.resultado.fieldKey || null,
+          bloque: parsed.resultado.bloque || parsed.bloque_destino || null,
+        }
+      ),
+    });
+    pipelineEvents.emit('operator_question_created', {
+      pipeline_id: pipelineId,
+      question,
+    });
+    return { parsed, question };
+  }
+
+  if (isOperatorQuestionAction && parsed.resultado && typeof parsed.resultado === 'object') {
+    const preguntas = Array.isArray(parsed.resultado.preguntas)
+      ? parsed.resultado.preguntas
+          .map((item, index) => {
+            const rawItem = typeof item === 'string' ? { question: item } : (item && typeof item === 'object' ? item : {});
+            return {
+              field_key: rawItem?.campo || rawItem?.field_key || `pregunta_${index + 1}`,
+              question: String(rawItem?.pregunta || rawItem?.question || '').trim(),
+              suggestion: inferTerminalSuggestion({
+                field_key: rawItem?.campo || rawItem?.field_key || `pregunta_${index + 1}`,
+                suggestion: rawItem?.sugerencia || rawItem?.suggestion || '',
+                metadata: {
+                  tipo: rawItem?.tipo || 'texto',
+                  opciones: Array.isArray(rawItem?.opciones) ? rawItem.opciones : [],
+                  default_value: rawItem?.default_value || rawItem?.default || null,
+                },
+              }),
+              metadata: {
+                bloque: rawItem?.bloque || parsed.bloque_destino || null,
+                accion_operador: parsed.accion,
+                tipo: rawItem?.tipo || 'texto',
+                opciones: Array.isArray(rawItem?.opciones) ? rawItem.opciones : [],
+                default_value: rawItem?.default_value || rawItem?.default || null,
+              },
+            };
+          })
+          .filter(item => item.question)
+      : [];
+
+    const activeQuestions = Array.isArray(parsed.resultado.preguntas_activas)
+      ? parsed.resultado.preguntas_activas
+          .map((item, index) => {
+            const rawItem = typeof item === 'string' ? { question: item } : (item && typeof item === 'object' ? item : {});
+            return {
+            field_key: rawItem?.campo || rawItem?.field_key || `pregunta_activa_${index + 1}`,
+            question: String(rawItem?.pregunta || rawItem?.question || '').trim(),
+            suggestion: inferTerminalSuggestion({
+              field_key: rawItem?.campo || rawItem?.field_key || `pregunta_activa_${index + 1}`,
+              metadata: {
+                tipo: rawItem?.tipo || 'texto',
+                opciones: Array.isArray(rawItem?.opciones) ? rawItem.opciones : [],
+                default_value: rawItem?.default_value || rawItem?.default || null,
+              },
+            }),
+            metadata: {
+              bloque: rawItem?.bloque || parsed.bloque_destino || null,
+              accion_operador: parsed.accion,
+              tipo: rawItem?.tipo || 'texto',
+              opciones: Array.isArray(rawItem?.opciones) ? rawItem.opciones : [],
+              default_value: rawItem?.default_value || rawItem?.default || null,
+            },
+          };
+          })
+          .filter(item => item.question)
+      : [];
+
+    const flatQuestions = Object.entries(parsed.resultado)
+      .filter(([key, value]) => String(key || '').startsWith('question_') && typeof value === 'string' && value.trim())
+      .map(([key, value]) => ({
+        field_key: String(key).replace(/^question_/, '') || key,
+        question: String(value).trim(),
+        suggestion: inferTerminalSuggestion({ field_key: String(key).replace(/^question_/, '') || key, metadata: { tipo: 'texto' } }),
+        metadata: {
+          bloque: parsed.bloque_destino || null,
+          accion_operador: parsed.accion,
+        },
+      }));
+
+    const normalizedQuestions = [...preguntas, ...activeQuestions, ...flatQuestions];
+
+    if (normalizedQuestions.length) {
+      const current = contextManager.getContext(pipelineId);
+      let mergedPending = Array.isArray(current?.preguntas_pendientes) ? [...current.preguntas_pendientes] : [];
+      const created = [];
+
+      normalizedQuestions.forEach(item => {
+        const existingPending = mergedPending.find(q => q.field_key === item.field_key || q.question === item.question);
+        if (existingPending) return;
+        if (mergedPending.length >= MAX_OPERATOR_QUESTIONS) return;
+
+        const question = contextManager.upsertOperatorQuestion(pipelineId, {
+          field_key: item.field_key,
+          question: item.question,
+          suggestion: item.suggestion || inferTerminalSuggestion({ field_key: item.field_key, metadata: item.metadata || { tipo: 'texto' } }),
+          status: 'pending',
+          metadata: item.metadata || {
+            bloque: parsed.bloque_destino || null,
+            accion_operador: parsed.accion,
+          },
+        });
+
+        mergedPending.push({
+          public_id: question.public_id,
+          question: question.question,
+          field_key: question.field_key,
+          bloque: parsed.bloque_destino || null,
+          suggestion: question.suggestion || '',
+          metadata: question.metadata || {},
+        });
+        created.push(question);
+        pipelineEvents.emit('operator_question_created', {
+          pipeline_id: pipelineId,
+          question,
+        });
+      });
+
+      if (created.length) {
+        contextManager.patchContext(pipelineId, {
+          editor: {
+            esperando_input: true,
+            pregunta_activa: created[0].question,
+          },
+          preguntas_pendientes: mergedPending,
+        });
+      }
+
+      return { parsed, question: created[0] || null };
+    }
   }
 
   const targetBlock = resolveOperatorBlock(parsed.bloque_destino, parsed.resultado?.bloque);
@@ -378,6 +613,7 @@ function applyOperatorResponseToContext(pipelineId, rawResponse) {
       assets_historial: currentBlock.assets_historial || [],
     });
   }
+  return { parsed, question: null };
 }
 
 function parseJsonFromAgentResponse(raw) {
@@ -398,6 +634,170 @@ function resolveOperatorBlock(path, fallback) {
   const parts = path.split('.').filter(Boolean);
   if (parts.includes('preferencias_usuario')) return 'preferencias_usuario';
   return parts[parts.length - 1] || null;
+}
+
+function mergePendingQuestions(currentList, nextItem) {
+  const list = Array.isArray(currentList) ? [...currentList] : [];
+  const idx = list.findIndex(item => item.public_id === nextItem.public_id);
+  if (idx >= 0) list[idx] = { ...list[idx], ...nextItem };
+  else list.push(nextItem);
+  return list;
+}
+
+function getPendingOperatorQuestions(pipelineId, ctx = null) {
+  const current = ctx || contextManager.getContext(pipelineId);
+  if (!current) return [];
+  const pendingIds = new Set(
+    (Array.isArray(current.preguntas_pendientes) ? current.preguntas_pendientes : [])
+      .map(item => item?.public_id)
+      .filter(Boolean)
+  );
+  return contextManager.getOperatorQuestions(pipelineId)
+    .filter(item => item?.status !== 'answered')
+    .filter(item => !pendingIds.size || pendingIds.has(item.public_id))
+    .sort((a, b) => String(a.created_at || a.actualizado_en || '').localeCompare(String(b.created_at || b.actualizado_en || '')));
+}
+
+function inferSuggestionFromQuestionText(questionText) {
+  const text = String(questionText || '').trim();
+  if (!text) return '';
+  const recommended = text.match(/(?:recomendad[oa]|sugerid[oa]|default)\s*[:\-]?\s*(\d+)/i);
+  if (recommended?.[1]) return recommended[1];
+  const optionNumbers = [...text.matchAll(/(?:^|\s)(\d+)\s*(?:[).:\-]|para\b)/gi)]
+    .map(match => String(match[1]).trim())
+    .filter(Boolean);
+  if (optionNumbers.length) return optionNumbers[optionNumbers.length - 1];
+  return '';
+}
+
+function inferTerminalSuggestion(question) {
+  const meta = question?.metadata || {};
+  if (question?.suggestion && String(question.suggestion).trim()) return String(question.suggestion).trim();
+  if (meta.default_value !== undefined && meta.default_value !== null && String(meta.default_value).trim()) return String(meta.default_value).trim();
+  if (Array.isArray(meta.opciones) && meta.opciones.length) return String(meta.opciones[0]).trim();
+  const inferredFromText = inferSuggestionFromQuestionText(question?.question || meta.question || '');
+  if (inferredFromText) return inferredFromText;
+  return 'Confirmado';
+}
+
+function answerOperatorQuestion(pipelineId, existing, answer, answerOrigin = 'manual') {
+  const metadata = existing.metadata || {};
+  const questionType = String(metadata.tipo || '').trim().toLowerCase();
+  if (questionType === 'numero' && !/^\d+$/.test(String(answer).trim())) {
+    return { error: 'numeric_answer_required', question: existing };
+  }
+
+  const updated = contextManager.upsertOperatorQuestion(pipelineId, {
+    ...existing,
+    answer,
+    answer_origin: answerOrigin,
+    status: 'answered',
+  });
+
+  const context = contextManager.getContext(pipelineId);
+  const currentPending = Array.isArray(context?.preguntas_pendientes) ? context.preguntas_pendientes : [];
+  const nextPending = currentPending.filter(item => item.public_id !== existing.public_id);
+  const fieldKey = metadata.field_key || existing.field_key || null;
+  const currentRequired = context?.preferencias_usuario?._requeridas || {};
+  const nextRequired = fieldKey && currentRequired[fieldKey]
+    ? {
+        ...currentRequired,
+        [fieldKey]: {
+          ...currentRequired[fieldKey],
+          campo: currentRequired[fieldKey]?.campo || fieldKey,
+          valor: answer,
+          resuelta: true,
+        },
+      }
+    : currentRequired;
+  const bloqueOrigen = metadata.bloque || null;
+  const isPreferenceCollectionBlock = bloqueOrigen === 'preferencias_usuario' || /preferenc/i.test(String(bloqueOrigen));
+  const currentDispatchQueue = Array.isArray(context?.ag05_dispatch_queue) ? context.ag05_dispatch_queue : [];
+  const currentOverrides = Array.isArray(context?.overrides_pendientes) ? context.overrides_pendientes : [];
+  const nextOverrides = (!isPreferenceCollectionBlock && bloqueOrigen)
+    ? [
+        ...currentOverrides,
+        {
+          bloque: bloqueOrigen,
+          field_key: fieldKey,
+          question: existing.question,
+          answer,
+          answer_origin: answerOrigin,
+          requested_at: new Date().toISOString(),
+          question_id: existing.public_id,
+        },
+      ]
+    : currentOverrides;
+  const shouldQueueDigestor = !isPreferenceCollectionBlock && bloqueOrigen && !currentDispatchQueue.some(item => item?.agente_id === 'AG-07');
+  const nextDispatchQueue = shouldQueueDigestor
+    ? [
+        ...currentDispatchQueue,
+        {
+          agente_id: 'AG-07',
+          accion: 'revisar_y_ensamblar',
+          parametros: {
+            origen: 'override_usuario',
+            bloque_origen: bloqueOrigen,
+            field_key: fieldKey,
+          },
+          bloque_destino: null,
+          solicitado_en: new Date().toISOString(),
+        },
+      ]
+    : currentDispatchQueue;
+
+  contextManager.patchContext(pipelineId, {
+    editor: {
+      esperando_input: nextPending.length > 0,
+      pregunta_activa: nextPending[0]?.question || null,
+    },
+    preguntas_pendientes: nextPending,
+    respuestas_usuario: {
+      ...(context?.respuestas_usuario || {}),
+      [existing.public_id]: {
+        question: existing.question,
+        answer,
+        answer_origin: answerOrigin,
+        bloque: metadata.bloque || null,
+        field_key: fieldKey,
+        answered_at: new Date().toISOString(),
+      },
+    },
+    overrides_pendientes: nextOverrides,
+    ag05_dispatch_queue: nextDispatchQueue,
+    preferencias_usuario: fieldKey ? {
+      ...(context?.preferencias_usuario || {}),
+      _requeridas: nextRequired,
+      [fieldKey]: {
+        valor: answer,
+        resuelta: true,
+        origen: answerOrigin,
+      },
+    } : (context?.preferencias_usuario || {}),
+  });
+
+  if (bloqueOrigen) {
+    const currentBloques = contextManager.getContext(pipelineId)?.bloques || {};
+    if (currentBloques[bloqueOrigen]?.estado === 'esperando_usuario') {
+      contextManager.updateBloque(pipelineId, bloqueOrigen, {
+        estado: 'completada',
+        resultado: JSON.stringify({ field_key: fieldKey, answer, answered_at: new Date().toISOString() }),
+        agente: 'usuario',
+      });
+    }
+  }
+
+  const refreshed = contextManager.getContext(pipelineId);
+  pipelineEvents.emit('operator_question_answered', {
+    pipeline_id: pipelineId,
+    question: updated,
+    context: refreshed,
+  });
+  pipelineEvents.emit('context_snapshot', {
+    pipeline_id: pipelineId,
+    context: refreshed,
+  });
+  return { question: updated, context: refreshed };
 }
 // ── Extracción de seeds del output del Arquitecto ──────────────
 function trySaveSeedFromResponse(pipelineId, response) {
@@ -433,6 +833,9 @@ function cmdHelp() {
   /skills          Ver skills disponibles
   /context         Ver contexto actual
   /logs            Ver historial de decisiones
+  /approve         Aprobar pregunta pendiente con sugerencia
+  /approve all     Aprobar todas las preguntas pendientes con sugerencias
+  /answer TEXTO    Responder la pregunta pendiente activa
   /reset           Reiniciar pipeline actual
   /cancel          Cancelar pipeline actual
 
@@ -440,6 +843,56 @@ function cmdHelp() {
   Ejemplo: "libro completo sobre inteligencia artificial"`,
     }],
     category: 'COMANDO',
+  };
+}
+
+function cmdApprove(args, pipelineId) {
+  if (!pipelineId) {
+    return { messages: [{ source: 'TERMINAL', text: '[TERMINAL] No hay pipeline activo.' }], category: 'COMANDO' };
+  }
+  const ctx = contextManager.getContext(pipelineId);
+  const pending = getPendingOperatorQuestions(pipelineId, ctx);
+  if (!pending.length) {
+    return { messages: [{ source: 'TERMINAL', text: '[TERMINAL] No hay preguntas pendientes por aprobar.' }], category: 'COMANDO', pipeline_id: pipelineId };
+  }
+
+  const approveAll = String(args?.[0] || '').toLowerCase() === 'all';
+  const targets = approveAll ? pending : [pending[0]];
+  targets.forEach(question => {
+    answerOperatorQuestion(pipelineId, question, inferTerminalSuggestion(question), 'automatic');
+  });
+
+  return {
+    messages: [{
+      source: 'TERMINAL',
+      text: `[TERMINAL] ${targets.length} pregunta(s) aprobada(s) con su sugerencia por defecto.`,
+    }],
+    category: 'COMANDO',
+    pipeline_id: pipelineId,
+  };
+}
+
+function cmdAnswer(args, pipelineId) {
+  if (!pipelineId) {
+    return { messages: [{ source: 'TERMINAL', text: '[TERMINAL] No hay pipeline activo.' }], category: 'COMANDO' };
+  }
+  const answer = Array.isArray(args) ? args.join(' ').trim() : '';
+  if (!answer) {
+    return { messages: [{ source: 'TERMINAL', text: '[TERMINAL] Uso: /answer tu_respuesta' }], category: 'COMANDO', pipeline_id: pipelineId };
+  }
+  const ctx = contextManager.getContext(pipelineId);
+  const pending = getPendingOperatorQuestions(pipelineId, ctx);
+  if (!pending.length) {
+    return { messages: [{ source: 'TERMINAL', text: '[TERMINAL] No hay preguntas pendientes por responder.' }], category: 'COMANDO', pipeline_id: pipelineId };
+  }
+  answerOperatorQuestion(pipelineId, pending[0], answer, 'manual');
+  return {
+    messages: [{
+      source: 'TERMINAL',
+      text: `[TERMINAL] Respuesta registrada para la pregunta activa.`,
+    }],
+    category: 'COMANDO',
+    pipeline_id: pipelineId,
   };
 }
 
