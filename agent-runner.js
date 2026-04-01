@@ -22,12 +22,12 @@ const FALLBACK_MODELS = {
 const FAST_RUNTIME_MODELS = {}; // No hardcoded fast models — use models.js defaults
 const AGENT_MAX_TOKENS = {
   'AG-TERM': 900,
-  'AG-00': 2200,
+  'AG-00': 4000,
   'AG-01': 1800,
   'AG-02': 2200,
   'AG-03': 1800,
-  'AG-04': 900,
-  'AG-05': 1200,
+  'AG-04': 500,
+  'AG-05': 800,
   'AG-06': 1800,
   'AG-07': 3200,
 };
@@ -162,7 +162,10 @@ async function runAgent(agentId, userInput, context = {}, opts = {}) {
   const systemPrompt = loadSystemPrompt(agentId);
   const maxTokens = opts.maxTokens || getAgentMaxTokens(agentId);
 
-  const contextBlock = Object.keys(context).length > 0
+  // AG-04 (media) gets its context via userInput (pilot-loop injects compactContextSlice there)
+  // so skip the duplicate full-context block to save tokens
+  const skipContextBlock = MEDIA_AGENTS.has(agentId);
+  const contextBlock = (!skipContextBlock && Object.keys(context).length > 0)
     ? `\n\n--- CONTEXTO ACTUAL DEL PIPELINE ---\n${JSON.stringify(compactContextForLLM(context), null, 2)}\n--- FIN CONTEXTO ---\n\n`
     : '';
 
@@ -376,8 +379,8 @@ async function runMediaAgent(agentId, systemPrompt, messages, opts = {}) {
   if (!isVideoAction && !isMediaReady()) throw new Error('FAL_KEY required for image generation');
 
   const { provider, model } = getAgentModel(agentId);
-  const textProvider = provider.startsWith('fal') ? 'openai' : provider;
-  const textModel    = model.startsWith('fal-ai/') ? 'gpt-4o-mini' : model;
+  const textProvider = provider.startsWith('fal') ? 'openrouter' : provider;
+  const textModel    = model.startsWith('fal-ai/') ? 'openrouter/free' : model;
   const falModel     = isVideoAction ? FAL_MODELS.video : (model.startsWith('fal-ai/') ? model : FAL_MODELS.image);
 
   // Extract scene image URL injected by pilot-loop for image-to-video continuity

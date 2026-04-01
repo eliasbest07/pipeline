@@ -31,7 +31,7 @@ body.fs-md .mt-sec-hdr,body.fs-lg .mt-sec-hdr{font-size:calc(11px * var(--fs))}
 
 /* ── TOOLBAR ── */
 #toolbar{position:fixed;top:11px;left:50%;transform:translateX(-50%);z-index:300}
-.toolbar-frame{display:inline-flex;align-items:center;gap:4px;position:relative;padding:5px 10px 26px;background:rgba(18,14,12,.96);border:1px solid rgba(255,255,255,.08);box-shadow:0 8px 22px rgba(0,0,0,.4),0 0 0 1px rgba(255,255,255,.02) inset;backdrop-filter:blur(12px);border-radius:5px}
+.toolbar-frame{display:inline-flex;align-items:center;gap:4px;position:relative;padding:5px 10px 26px;background:rgba(18,14,12,.96);border:1px solid rgba(255,255,255,.14);box-shadow:0 8px 22px rgba(0,0,0,.4),0 0 0 1px rgba(255,255,255,.04) inset;backdrop-filter:blur(12px);border-radius:5px}
 .toolbar-main-row{display:contents}
 #toolbar-models-line{position:absolute;bottom:4px;left:10px;right:10px;display:flex;align-items:center;gap:6px;overflow:hidden;opacity:.65}
 #toolbar-models-line:hover{opacity:1}
@@ -51,8 +51,8 @@ body.fs-md .mt-sec-hdr,body.fs-lg .mt-sec-hdr{font-size:calc(11px * var(--fs))}
 .toolbar-model-chip select{background:transparent;border:none;border-bottom:1px solid rgba(200,160,64,.15);color:#8a7848;font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 4px;max-width:140px;outline:none;cursor:pointer}
 .toolbar-model-chip select:focus{border-bottom-color:rgba(200,160,64,.4);color:#c8a040}
 .tsep{width:1px;height:24px;background:rgba(255,255,255,.09);flex-shrink:0;margin:0 3px}
-.tool-btn{display:flex;align-items:center;justify-content:center;background:transparent;border:none;color:#7f766d;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:4px 8px;cursor:pointer;border-radius:3px;letter-spacing:.03em;transition:.12s;white-space:nowrap;gap:0}
-.tool-btn:hover{background:rgba(255,255,255,.05);color:#cfc7bc}
+.tool-btn{display:flex;align-items:center;justify-content:center;background:transparent;border:none;color:#b8b0a8;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:4px 8px;cursor:pointer;border-radius:3px;letter-spacing:.03em;transition:.12s;white-space:nowrap;gap:0}
+.tool-btn:hover{background:rgba(255,255,255,.07);color:#f0e8e0}
 .tb-col{flex-direction:column;gap:3px;min-height:46px;padding:5px 12px;font-size:12px;line-height:1.15}
 .tb-stop-ico{font-size:11px;color:#9a9088;line-height:1}
 .tb-hist{margin-left:auto}

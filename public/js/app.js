@@ -2286,9 +2286,70 @@ async function stopAll(){
 async function _readPipelineSSE(){
   glog('warn','Pipeline','system','El runner SSE del canvas está desactivado. El pipeline ahora corre solo por el loop del Piloto.');
 }
+
+async function instantiatePinnedExamplePipeline(){
+  const templateId=PINNED_EXAMPLE_PIPELINE.id;
+  const [seed,state]=await Promise.all([
+    fetch('/api/pipelines/'+templateId+'/seed').then(r=>r.ok?r.json():null).catch(()=>null),
+    fetch('/api/pipelines/'+templateId+'/state').then(r=>r.ok?r.json():null).catch(()=>null),
+  ]);
+  if(!seed?.seed_template||!seed?.agent_menu)throw new Error('No se pudo leer la semilla del pipeline de ejemplo');
+
+  const res=await fetch('/api/pipelines',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:PINNED_EXAMPLE_PIPELINE.name}),
+  });
+  const pipeline=await res.json().catch(()=>({}));
+  if(!res.ok||!pipeline?.id)throw new Error(pipeline.error||'No se pudo crear la copia del pipeline de ejemplo');
+
+  const seedRes=await fetch('/api/pipelines/'+pipeline.id+'/seed',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      seed_template:seed.seed_template,
+      agent_menu:seed.agent_menu,
+    }),
+  });
+  if(!seedRes.ok){
+    const data=await seedRes.json().catch(()=>({}));
+    throw new Error(data.error||'No se pudo copiar la semilla del pipeline de ejemplo');
+  }
+
+  if(Array.isArray(state?.nodes)&&Array.isArray(state?.conns)){
+    const snapshotRes=await fetch('/api/pipelines/'+pipeline.id+'/state',{
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        nodes:state.nodes,
+        conns:state.conns,
+        outputCards:[],
+      }),
+    });
+    if(!snapshotRes.ok){
+      const data=await snapshotRes.json().catch(()=>({}));
+      throw new Error(data.error||'No se pudo copiar el canvas del pipeline de ejemplo');
+    }
+  }
+
+  await loadPipelinesInSidebar();
+  await switchPipeline(pipeline.id,pipeline.name);
+  glog('done','Pipeline','system','Se creó una copia nueva de "'+PINNED_EXAMPLE_PIPELINE.name+'" lista para ejecutar.');
+  return pipeline;
+}
+
 async function runAll(){
   if(!currentPipelineId){glog('warn','Pipeline','system','Sin pipeline activo. Crea uno primero.');return;}
   if(!nodes.length){glog('warn','Pipeline','system','Sin agentes en el canvas.');return;}
+  if(currentPipelineId===PINNED_EXAMPLE_PIPELINE.id){
+    try{
+      glog('think','Pipeline','system','Creando una copia ejecutable desde la plantilla "'+PINNED_EXAMPLE_PIPELINE.name+'"...');
+      await instantiatePinnedExamplePipeline();
+    }catch(err){
+      glog('error','Pipeline','system','No se pudo instanciar el pipeline de ejemplo: '+err.message);
+      return;
+    }
+  }
   _userStartedRun=true;
   ensureLogVisibleForActivity();
   collapseWindows();
@@ -2306,6 +2367,8 @@ async function runAll(){
         if(prepared){
           return runAll();
         }
+      }else if(e.error==='pipeline_already_complete'){
+        glog('warn','Pipeline','system','Este pipeline ya estaba completado. Usa "'+PINNED_EXAMPLE_PIPELINE.name+'" para crear una copia nueva o crea otro pipeline.');
       }
       glog('error','Pipeline','system','Error: '+(e.error||res.status));
     }
