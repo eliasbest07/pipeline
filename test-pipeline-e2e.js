@@ -520,12 +520,27 @@ async function evaluateFinalOutput(pipelineId) {
   // Extraer y verificar URLs de assets desde assembly_ready
   const assetUrls = extractAssetUrls(state.assembly);
 
+  // Buscar en los outputs finales (contenido que es una URL de video/imagen/pdf)
+  const urlPattern = /\.(mp4|webm|mov|pdf|zip|mp3|wav|png|jpg|jpeg|gif)(\?|$)/i;
+  const pathPattern = /\/(uploads|pipeline-outputs)\//i;
+  for (const o of outputs) {
+    const c = typeof o.contenido === 'string' ? o.contenido.trim() : '';
+    if (c && (urlPattern.test(c) || pathPattern.test(c)) && !c.startsWith('{')) {
+      assetUrls.push({ url: c, source: `output_${o.bloque || 'unknown'}`, tipo: o.tipo });
+    }
+  }
+
   // También buscar en los eventos asset_ready acumulados
   const assetReadyEvents = state.events.filter(e => e.event === 'asset_ready');
   for (const e of assetReadyEvents) {
     const d = e.data || {};
     if (d.url) assetUrls.push({ url: d.url, source: 'asset_ready', tipo: d.tipo_asset });
     if (d.path) assetUrls.push({ url: d.path, source: 'asset_ready_path', tipo: d.tipo_asset });
+    // Also check nested asset.contenido
+    const contenido = d.asset?.contenido;
+    if (contenido && typeof contenido === 'string' && (urlPattern.test(contenido) || pathPattern.test(contenido))) {
+      assetUrls.push({ url: contenido, source: 'asset_ready_contenido', tipo: d.tipo_asset });
+    }
   }
 
   // Deduplicar por URL

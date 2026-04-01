@@ -1622,7 +1622,16 @@ function applyAgentResultToContext(pipelineId, decision, rawResult) {
     });
   }
 
-  const runtimeOutputContent = parsed.asset?.contenido || serializedResult;
+  // For media assets (image/video): prefer the real URL from asset.contenido or resultado.
+  // If there's no URL (failed generation), store null so the runtime output is skipped
+  // rather than polluting it with raw JSON from the resultado.
+  const isMediaOutput = ['imagen', 'video'].includes(parsed.asset?.tipo_asset);
+  const mediaUrl = isMediaOutput
+    ? (parsed.asset?.contenido || parsed.resultado?.imagen_url || parsed.resultado?.video_url || null)
+    : null;
+  const runtimeOutputContent = isMediaOutput
+    ? mediaUrl
+    : (parsed.asset?.contenido || serializedResult);
   if (runtimeOutputContent && runtimeOutputContent !== 'null' && runtimeOutputContent !== '{}' && runtimeOutputContent !== '""') {
     outputRecord = contextManager.upsertRuntimeOutput(pipelineId, {
       agent_id: decision.agente_id,
@@ -1670,8 +1679,11 @@ function applyAgentResultToContext(pipelineId, decision, rawResult) {
       parsed.resultado?.pdf_url ||
       parsed.resultado?.video_url
     );
+    // Never downgrade from 'completado' → 'en_revision': once the assembly is done, keep it done
+    const currentEstado = ctx?.ensamblaje?.estado;
+    const newEstado = assemblyReady ? 'completado' : (currentEstado === 'completado' ? 'completado' : 'en_revision');
     contextManager.updateAssembly(pipelineId, {
-      estado: assemblyReady ? 'completado' : 'en_revision',
+      estado: newEstado,
       producto_final: serializeStructuredResult(parsed.resultado),
       notas: buildResultSummary(parsed.resultado),
       asset_ids: assetsVigentes.map(asset => asset.asset_id),
@@ -1692,7 +1704,7 @@ function applyAgentResultToContext(pipelineId, decision, rawResult) {
     const nextCtx = contextManager.getContext(pipelineId);
     emitPipelineEvent('assembly_ready', pipelineId, {
       agent_id: decision.agente_id,
-      estado: assemblyReady ? 'completado' : 'en_revision',
+      estado: newEstado,
       asset_ids: assetsVigentes.map(asset => asset.asset_id),
       output_ids: runtimeOutputs.map(output => output.public_id),
       producto_final: nextCtx?.ensamblaje?.producto_final || serializeStructuredResult(parsed.resultado),
