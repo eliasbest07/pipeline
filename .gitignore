@@ -7,3 +7,16 @@ pipeline.db-wal
 firebase-debug.log
 docs/
 test-pipeline-e2e.js
+pipeline_flow_screenshots/
+test-flow-observer.js
+test-pipeline-monitor.js    
+uploads/
+pipeline_outputs/
+pipeline_contexts/
+pipeline_seeds/
+pipeline_agents/
+pipeline_skills/
+pipeline_connections/
+pipeline_nodes/
+pipeline_outputs/
+pipeline_outputs/

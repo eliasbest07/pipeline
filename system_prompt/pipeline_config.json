@@ -7,7 +7,7 @@
     "max_workers_global": 5,
     "max_workers_por_agente": {
       "AG-03": 4,
-      "AG-04": 2,
+      "AG-04": 3,
       "AG-06": 2,
       "AG-07": 1
     },

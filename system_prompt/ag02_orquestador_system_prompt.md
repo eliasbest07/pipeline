@@ -153,6 +153,16 @@ El Piloto especifica la política al llamarte.
 
 En todos los casos: **el trabajo ya completado nunca se descarta.**
 
+### Política de fallback automático (se aplica siempre, independiente de la política indicada)
+
+Si una tarea falla **3 o más veces consecutivas** sin importar la política activa:
+1. Marca esa tarea como `completada_parcialmente` con el contenido generado hasta ese punto (aunque sea parcial)
+2. Registra el error en el campo `error_parcial` de la tarea
+3. **No bloquees el pipeline** — continúa con las tareas siguientes
+4. Incluye en el reporte final: `"advertencia": "bloque X completado parcialmente por fallos persistentes"`
+
+Esto previene que un bloque grande (ej: `contenido_lecciones`) bloquee el pipeline completo cuando falla por límites de contexto o errores transitorios. El output parcial vale más que ningún output.
+
 ---
 
 ## PROCESO DE ORQUESTACIÓN

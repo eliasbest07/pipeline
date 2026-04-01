@@ -1,17 +1,17 @@
 /* ═══════════════════════════════════════════════════════
-   PIPELINE — Onboarding System  v2.0
-   Phase 1: Animated welcome in centered terminal
-   Phase 2: Terminal tours the UI with spotlights
-   Phase 3+: Agent creation (coming soon)
+   PIPELINE — Onboarding System  v3.0
+   Phase 1: Animated welcome
+   Phase 2: Build video pipeline on canvas
+   Phase 3: Type prompt + EJECUTAR
+   Phase 4: Pipeline story → 10min wait → video result
 ═══════════════════════════════════════════════════════ */
 (function () {
   'use strict';
 
-  const STORAGE_KEY = 'pipeline_onboarded_v1';
+  const STORAGE_KEY = 'pipeline_onboarded_v3';
   let _active = false;
   let _step = 0;
-  let _pilotNode = null;   // pilot node created in Phase 3 (reused in Phase 4)
-  let _researchNode = null; // research node created in Phase 4
+  let _cv = {}; // canvas nodes built for the demo
 
   /* ── utils ──────────────────────────────────────────── */
   const $ = id => document.getElementById(id);
@@ -30,8 +30,179 @@
   }
 
   /* ── localStorage ───────────────────────────────────── */
-  const isNew  = () => !localStorage.getItem(STORAGE_KEY);
+  const isNew   = () => !localStorage.getItem(STORAGE_KEY);
   const markDone = () => localStorage.setItem(STORAGE_KEY, '1');
+
+  /* ── Smooth canvas pan/zoom ─────────────────────────── */
+  function panTo(cx, cy, targetSc, ms = 900) {
+    return new Promise(resolve => {
+      if (typeof sc === 'undefined' || typeof px === 'undefined') { resolve(); return; }
+      const startPx = px, startPy = py, startSc = sc;
+      const endPx = -cx * targetSc + window.innerWidth / 2;
+      const endPy = -cy * targetSc + window.innerHeight / 2;
+      const t0 = performance.now();
+      function step(now) {
+        const p = Math.min(1, (now - t0) / ms);
+        const e = 1 - Math.pow(1 - p, 3);
+        px = startPx + (endPx - startPx) * e;
+        py = startPy + (endPy - startPy) * e;
+        sc = startSc + (targetSc - startSc) * e;
+        if (typeof applyT === 'function') applyT();
+        if (p < 1) requestAnimationFrame(step);
+        else resolve();
+      }
+      requestAnimationFrame(step);
+    });
+  }
+
+  /* ── Highlight a canvas node briefly ───────────────── */
+  function flashNode(n, color, ms = 1400) {
+    if (!n) return;
+    const el = document.getElementById(n.id);
+    if (!el) return;
+    el.style.transition = 'box-shadow .3s';
+    el.style.boxShadow = `0 0 0 3px ${color}99, 0 0 28px ${color}55`;
+    setTimeout(() => { if (el) { el.style.transition = 'box-shadow .6s'; el.style.boxShadow = ''; } }, ms);
+  }
+
+  /* ══════════════════════════════════════════════════════
+     BUILD THE EXAMPLE VIDEO PIPELINE ON CANVAS
+  ══════════════════════════════════════════════════════ */
+  function buildObVideoCanvas() {
+    if (typeof nodes === 'undefined' || typeof addNode !== 'function') return {};
+
+    // Clear canvas completely
+    nodes.forEach(n => { const el = document.getElementById(n.id); if (el) el.remove(); });
+    outputCards.forEach(c => { const el = document.getElementById(c.id); if (el) el.remove(); });
+    nodes = []; conns = []; outputCards = [];
+    const svg = document.getElementById('svgl');
+    if (svg) svg.innerHTML = '';
+
+    // Canvas center
+    const vc = (typeof getCanvasViewportCenter === 'function')
+      ? getCanvasViewportCenter() : { x: 3000, y: 2500 };
+    const cx = vc.x, cy = vc.y;
+
+    // Layout positions (horizontal left → right)
+    const pilotX   = cx - 620;
+    const writerX  = cx - 160;
+    const imgX     = cx + 270;
+    const videoX   = cx + 700;
+    const asmX     = cx + 1130;
+    const opX      = cx - 580;
+    const seedX    = cx - 930;
+    const mainY    = cy - 200;
+    const opY      = cy + 290;
+    const seedY    = cy - 50;
+
+    const refs = {};
+
+    // Create nodes (pilot first so seedFirstPilotSetup doesn't auto-run extra things)
+    // We pass false-ish positions to avoid the auto-setup, then reposition
+    refs.pilot    = addNode('pilot',    pilotX,  mainY);
+    refs.writer   = addNode('prompt',   writerX, mainY);
+    refs.imggen   = addNode('image',    imgX,    mainY);
+    refs.video    = addNode('video',    videoX,  mainY);
+    refs.assembly = addNode('assembly', asmX,    mainY);
+    refs.operator = addNode('human',    opX,     opY);
+
+    // Remove any auto-generated input card from seedFirstPilotSetup
+    // (it creates one when first pilot is added)
+    outputCards.forEach(c => {
+      if ((c._kind === 'input' || c._kind === 'seed') && c.isSeedPrompt) {
+        const el = document.getElementById(c.id);
+        if (el) el.remove();
+      }
+    });
+    outputCards = outputCards.filter(c => !(c.isSeedPrompt && (c._kind === 'input' || c._kind === 'seed')));
+
+    // Remove auto-added human node from seedFirstPilotSetup
+    const extraHumans = nodes.filter(n => n.type === 'human' && n.id !== refs.operator.id);
+    extraHumans.forEach(n => {
+      const el = document.getElementById(n.id);
+      if (el) el.remove();
+    });
+    nodes = nodes.filter(n => !(n.type === 'human' && n.id !== refs.operator.id));
+
+    // Re-position pilot (seedFirstPilotSetup may have moved it)
+    refs.pilot.x = pilotX; refs.pilot.y = mainY;
+    const pilotEl = document.getElementById(refs.pilot.id);
+    if (pilotEl) { pilotEl.style.left = pilotX + 'px'; pilotEl.style.top = mainY + 'px'; }
+
+    // Re-position operator
+    refs.operator.x = opX; refs.operator.y = opY;
+    const opEl = document.getElementById(refs.operator.id);
+    if (opEl) { opEl.style.left = opX + 'px'; opEl.style.top = opY + 'px'; }
+
+    // Clear auto-connections from seedFirstPilotSetup
+    conns = conns.filter(c =>
+      nodes.some(n => n.id === c.from || n.id === c.to) &&
+      outputCards.some(card => card.id === c.from) === false
+    );
+    conns = [];
+
+    // Create seed / input card manually
+    let seedCard = null;
+    if (typeof mkInputCard === 'function') {
+      seedCard = mkInputCard('text', seedX, seedY);
+      if (seedCard) {
+        seedCard.label = 'Prompt semilla';
+        seedCard.isSeedPrompt = true;
+        if (typeof _renderInputCardDOM === 'function') _renderInputCardDOM(seedCard);
+        const el = document.getElementById(seedCard.id);
+        const ta = el && el.querySelector('.idc-textarea');
+        if (ta) { ta.value = ''; ta.placeholder = 'Escribe tu idea aquí...'; }
+        // Add run button if missing
+        const runBtn = el && el.querySelector('.sic-run-btn');
+        if (!runBtn && el) {
+          const body = el.querySelector('.oc-body');
+          if (body) {
+            const btn = document.createElement('button');
+            btn.className = 'sic-run-btn';
+            btn.textContent = '▶ EJECUTAR';
+            btn.onclick = e => { e.stopPropagation(); if (typeof runAll === 'function') runAll(); };
+            body.appendChild(btn);
+          }
+        }
+      }
+      refs.seedCard = seedCard;
+    }
+
+    // Connections
+    function mkConn(fromId, fp, toId, tp, active, cond, condT) {
+      if (!fromId || !toId) return;
+      conns.push({
+        id: 'c' + Math.random().toString(36).slice(2, 10),
+        from: fromId, fp, to: toId, tp,
+        active: active || false,
+        cond: cond || false,
+        condT: condT || 'no',
+        fromCard: fp === 'out' && !nodes.some(n => n.id === fromId),
+      });
+    }
+
+    if (seedCard) mkConn(seedCard.id, 'out', refs.pilot.id, 'in', true);
+    mkConn(refs.pilot.id,    'out-y', refs.operator.id, 'in',  false, true, 'yes');
+    mkConn(refs.pilot.id,    'out',   refs.writer.id,   'in',  false);
+    mkConn(refs.writer.id,   'out',   refs.imggen.id,   'in',  false);
+    mkConn(refs.imggen.id,   'out',   refs.video.id,    'in',  false);
+    mkConn(refs.video.id,    'out',   refs.assembly.id, 'in',  false);
+
+    // Output cards — show representative outputs at each stage
+    if (typeof dropOutputCard === 'function') {
+      // Pilot → json context card (3 scenes × 5s)
+      dropOutputCard(refs.pilot.id,    pilotX + 350, mainY + 15);
+      // Writer → text output (scene description)
+      dropOutputCard(refs.writer.id,   writerX + 260, mainY + 15);
+      // ImgGen → image output (×3 shown stacked)
+      dropOutputCard(refs.imggen.id,   imgX + 260, mainY + 10);
+    }
+
+    if (typeof drawConns === 'function') drawConns();
+    if (typeof updateMM === 'function') updateMM();
+
+    return refs;
+  }
 
   /* ══════════════════════════════════════════════════════
      OVERLAY
@@ -67,11 +238,8 @@
       sp.id = 'ob-spotlight';
       document.body.appendChild(sp);
     }
-    // animate position
-    sp.style.left   = x + 'px';
-    sp.style.top    = y + 'px';
-    sp.style.width  = w + 'px';
-    sp.style.height = h + 'px';
+    sp.style.left = x + 'px'; sp.style.top = y + 'px';
+    sp.style.width = w + 'px'; sp.style.height = h + 'px';
     requestAnimationFrame(() => sp.classList.add('on'));
   }
   function hideSpotlight() {
@@ -82,114 +250,75 @@
   }
 
   /* ══════════════════════════════════════════════════════
-     LOGWIN POSITION CONTROL
+     LOGWIN POSITIONING
   ══════════════════════════════════════════════════════ */
   const mob = () => window.innerWidth < 640;
 
   function applyPos(cfg) {
     const w = $('logwin');
+    if (!w) return;
     w.style.transition = 'all .62s cubic-bezier(.4,0,.2,1)';
     Object.assign(w.style, cfg);
   }
 
   function posCenter(h = 480) {
     applyPos({
-      position : 'fixed',
-      left     : '50%',
-      top      : '50%',
-      bottom   : 'auto',
-      right    : 'auto',
+      position: 'fixed', left: '50%', top: '50%', bottom: 'auto', right: 'auto',
       transform: 'translate(-50%,-50%)',
-      width    : mob() ? '92vw' : 'min(600px,92vw)',
-      height   : h + 'px',
-      zIndex   : '10000',
+      width: mob() ? '92vw' : 'min(600px,92vw)', height: h + 'px', zIndex: '10000',
     });
   }
 
-  function posToolbar() {
-    // small window just below the toolbar
-    const tb = $('toolbar');
-    const rect = tb ? tb.getBoundingClientRect() : { bottom: 52 };
+  function posBottomLeft(h = 220) {
     applyPos({
-      position : 'fixed',
-      left     : '50%',
-      top      : (rect.bottom + 12) + 'px',
-      bottom   : 'auto',
-      right    : 'auto',
-      transform: 'translateX(-50%)',
-      width    : mob() ? '92vw' : 'min(560px,90vw)',
-      height   : '205px',
-      zIndex   : '10000',
+      position: 'fixed', left: mob() ? '2%' : '16px', bottom: '16px',
+      top: 'auto', right: 'auto', transform: 'none',
+      width: mob() ? '96vw' : '440px', height: h + 'px', zIndex: '10002',
     });
   }
 
-  function posCanvas() {
-    // center-right, so the canvas is somewhat visible on the left
+  function posTopRight(h = 220) {
     applyPos({
-      position : 'fixed',
-      left     : mob() ? '4%' : '55%',
-      top      : '50%',
-      bottom   : 'auto',
-      right    : 'auto',
-      transform: mob() ? 'translateY(-50%)' : 'translate(-50%,-50%)',
-      width    : mob() ? '92vw' : 'min(500px,42vw)',
-      height   : '240px',
-      zIndex   : '10000',
-    });
-  }
-
-  function posSidebar() {
-    // upper-right corner so the sidebar on the left is visible
-    applyPos({
-      position : 'fixed',
-      left     : mob() ? '4%' : '60%',
-      top      : '14%',
-      bottom   : 'auto',
-      right    : 'auto',
-      transform: 'none',
-      width    : mob() ? '92vw' : 'min(480px,38vw)',
-      height   : '220px',
-      zIndex   : '10000',
+      position: 'fixed', right: '16px', top: '72px',
+      left: 'auto', bottom: 'auto', transform: 'none',
+      width: mob() ? '92vw' : '420px', height: h + 'px', zIndex: '10002',
     });
   }
 
   function restoreLogwin() {
     const w = $('logwin');
+    if (!w) return;
     w.style.transition = 'all .5s cubic-bezier(.4,0,.2,1)';
     setTimeout(() => {
-      ['position','right','bottom','left','top','transform','width','zIndex']
+      ['position', 'right', 'bottom', 'left', 'top', 'transform', 'width', 'zIndex']
         .forEach(p => w.style[p] = '');
       w.style.height = '420px';
       setTimeout(() => { w.style.transition = ''; }, 540);
     }, 80);
   }
 
-  /* ══════════════════════════════════════════════════════
-     BADGE & FILTERS & TITLE
-  ══════════════════════════════════════════════════════ */
+  /* ── UI label helpers ────────────────────────────────── */
   function setBadgeLive() {
     const b = $('log-badge');
-    b.textContent = 'LIVE';
-    b.className = 'ltb-badge ob-live-badge';
+    if (b) { b.textContent = 'LIVE'; b.className = 'ltb-badge ob-live-badge'; }
   }
   function restoreBadge() {
     const b = $('log-badge');
-    b.textContent = 'IDLE';
-    b.className = 'ltb-badge';
+    if (b) { b.textContent = 'IDLE'; b.className = 'ltb-badge'; }
   }
-
   function setLiveTab(label = '▶ LIVE') {
-    $('logfilters').innerHTML =
+    const lf = $('logfilters');
+    if (lf) lf.innerHTML =
       `<div class="ob-live-tab">${label}</div>
        <div class="ob-live-dot"></div>
-       <span class="ob-live-status" id="ob-live-status">onboarding activo</span>`;
+       <span class="ob-live-status" id="ob-live-status">iniciando...</span>`;
   }
   function setLiveStatus(txt) {
-    const s = $('ob-live-status');
-    if (s) s.textContent = txt;
+    const s = $('ob-live-status'); if (s) s.textContent = txt;
   }
   function restoreFilters() {
-    $('logfilters').innerHTML = `
+    const lf = $('logfilters');
+    if (lf) lf.innerHTML = `
       <div class="lf on" onclick="setLogFilter('all',this)">Todo</div>
       <div class="lf-sep"></div>
       <div class="lf" onclick="setLogFilter('think',this)">Pensamiento</div>
@@ -199,21 +328,17 @@
       <div class="lf" onclick="setLogFilter('system',this)">Sistema</div>
       <div class="lf-clear" onclick="clearLog()">✕ limpiar</div>`;
   }
-
-  function setTitle(txt) {
-    const t = $('logtitle');
-    if (t) t.textContent = txt;
-  }
+  function setTitle(txt) { const t = $('logtitle'); if (t) t.textContent = txt; }
   function restoreTitle() { setTitle('Log Global — Pipeline'); }
 
-  /* ══════════════════════════════════════════════════════
-     CONTENT HELPERS
-  ══════════════════════════════════════════════════════ */
+  /* ── Content helpers ─────────────────────────────────── */
   function mountObody() {
-    $('logbody').innerHTML = '';
+    const lb = $('logbody');
+    if (!lb) return null;
+    lb.innerHTML = '';
     const ob = document.createElement('div');
     ob.id = 'ob-body';
-    $('logbody').appendChild(ob);
+    lb.appendChild(ob);
     return ob;
   }
   const getOb = () => $('ob-body');
@@ -226,12 +351,12 @@
       d.className = m.cls || 'ob-desc';
       if (m.color) d.style.color = m.color;
       ob.appendChild(d);
-      await typeInto(d, m.t, m.spd ?? 20);
+      await typeInto(d, m.t, m.spd != null ? m.spd : 20);
       scrollBot();
     }
   }
 
-  function makeProgress(active /* 0-based */, total = 4) {
+  function makeProgress(active, total = 4) {
     const p = document.createElement('div');
     p.className = 'ob-progress';
     p.innerHTML = Array.from({ length: total }, (_, i) =>
@@ -247,19 +372,13 @@
       <button class="ob-btn-skip" onclick="window._ob.skip()">${skipLabel}</button>
       <button class="ob-btn-next" id="ob-main-btn">${nextLabel}</button>`;
     div.style.opacity = '0';
-    setTimeout(() => {
-      div.style.transition = 'opacity .5s';
-      div.style.opacity = '1';
-    }, 60);
-    setTimeout(() => {
-      const btn = div.querySelector('#ob-main-btn');
-      if (btn) btn.onclick = nextFn;
-    }, 0);
+    setTimeout(() => { div.style.transition = 'opacity .5s'; div.style.opacity = '1'; }, 60);
+    setTimeout(() => { const btn = div.querySelector('#ob-main-btn'); if (btn) btn.onclick = nextFn; }, 0);
     return div;
   }
 
   /* ══════════════════════════════════════════════════════
-     PHASE 1 — WELCOME
+     PHASE 1 — BIENVENIDA
   ══════════════════════════════════════════════════════ */
   const ASCII = [
     '██████╗ ██╗██████╗ ███████╗██╗     ██╗███╗   ██╗███████╗',
@@ -281,27 +400,25 @@
 
   const WELCOME_LINES = [
     { t: '¡Bienvenido/a a Pipeline!', cls: 'ob-h1', spd: 42, d: 500 },
-    { t: '', d: 60 },
-    { t: 'Pipeline es un canvas visual donde puedes', cls: 'ob-desc', spd: 18, d: 80 },
-    { t: 'crear agentes de IA y conectarlos entre sí', cls: 'ob-desc', spd: 18, d: 40 },
-    { t: 'para automatizar cualquier flujo de trabajo.', cls: 'ob-desc', spd: 18, d: 40 },
-    { t: '', d: 60 },
-    { t: '⬡ Sin código. Solo IA que trabaja por ti.', cls: 'ob-hint', spd: 22, d: 200 },
-    { t: '', d: 60 },
-    { t: 'Déjame mostrarte cómo funciona en 30 seg...', cls: 'ob-sub', spd: 20, d: 300 },
+    { t: '', d: 50 },
+    { t: 'Escribe una idea.', cls: 'ob-desc', spd: 22, d: 80 },
+    { t: 'Pipeline la convierte en un video —', cls: 'ob-desc', spd: 18, d: 40 },
+    { t: 'automáticamente, con agentes de IA.', cls: 'ob-desc', spd: 18, d: 40 },
+    { t: '', d: 50 },
+    { t: '⬡  Gratis por defecto · Pro para máxima calidad', cls: 'ob-hint', spd: 18, d: 180 },
+    { t: '', d: 40 },
+    { t: '▶ Te muestro cómo funciona en el ejemplo...', cls: 'ob-sub', spd: 20, d: 250 },
   ];
 
   async function runWelcome() {
     const ob = getOb();
     ob.innerHTML = '';
 
-    // cursor blink
     const cline = document.createElement('div');
     cline.className = 'ob-cursor-line';
     ob.appendChild(cline);
     await sleep(250);
 
-    // ASCII logo
     const pre = document.createElement('pre');
     pre.className = 'ob-ascii';
     ob.appendChild(pre);
@@ -313,22 +430,17 @@
     }
     await sleep(260);
 
-    // init sequence
     for (const cfg of INIT_SEQ) {
       await sleep(cfg.d);
       const d = document.createElement('div');
-      d.className = 'ob-init-line';
-      d.style.color = cfg.c;
+      d.className = 'ob-init-line'; d.style.color = cfg.c;
       ob.appendChild(d);
       await typeInto(d, cfg.t, 20);
       scrollBot();
     }
 
     await sleep(400);
-
-    const sep = document.createElement('div');
-    sep.className = 'ob-sep';
-    ob.appendChild(sep);
+    const sep = document.createElement('div'); sep.className = 'ob-sep'; ob.appendChild(sep);
     await sleep(180);
 
     await typeLines(ob, WELCOME_LINES);
@@ -336,596 +448,284 @@
 
     ob.appendChild(makeProgress(0));
     await sleep(200);
-    ob.appendChild(makeButtons('✕ Omitir', 'Continuar →', () => window._ob.next()));
+    ob.appendChild(makeButtons('✕ Omitir', 'Ver el ejemplo →', () => window._ob.next()));
     scrollBot();
   }
 
   /* ══════════════════════════════════════════════════════
-     PHASE 2 — UI TOUR
+     PHASE 2 — CONSTRUIR CANVAS
+     Construye el pipeline y narra cada agente
   ══════════════════════════════════════════════════════ */
-  const TOUR_SECTIONS = [
-    {
-      id: 'toolbar',
-      statusLabel: 'inspeccionando toolbar...',
-      titleLabel: '◀ BARRA DE HERRAMIENTAS ▶',
-      moveLogwin: posToolbar,
-      spotlight: () => {
-        const tb = $('toolbar');
-        if (!tb) return;
-        const r = tb.getBoundingClientRect();
-        showSpotlight(r.left - 8, r.top - 8, r.width + 16, r.height + 16);
-      },
-      lines: [
-        { t: '── BARRA DE HERRAMIENTAS ──', cls: 'ob-section-title', d: 180 },
-        { t: '', d: 40 },
-        { t: '+ Nodo   →   añade un agente al canvas', cls: 'ob-desc', d: 100, spd: 15 },
-        { t: '→ Conectar →  une salidas con entradas', cls: 'ob-desc', d: 70,  spd: 15 },
-        { t: '▶ Run    →   ejecuta el pipeline', cls: 'ob-desc', d: 70,  spd: 15 },
-        { t: '■ Stop   →   detiene la ejecución', cls: 'ob-desc', d: 60,  spd: 15 },
-        { t: '⬡ Modelos  → cambia el modelo de IA', cls: 'ob-desc', d: 70,  spd: 15 },
-        { t: '', d: 40 },
-        { t: '▶ EJECUTAR — modo automático con IA', cls: 'ob-hint', d: 180, spd: 18 },
-      ],
-      pause: 1800,
-      beforeShow: null,
-      afterHide: null,
-    },
-    {
-      id: 'canvas',
-      statusLabel: 'explorando canvas...',
-      titleLabel: '◀ CANVAS — ÁREA DE TRABAJO ▶',
-      moveLogwin: posCanvas,
-      spotlight: () => {
-        const tb  = $('toolbar');
-        const tbH = tb ? tb.getBoundingClientRect().bottom + 6 : 58;
-        const W   = window.innerWidth;
-        const H   = window.innerHeight;
-        // spotlight left ~55% of screen (canvas area, away from terminal)
-        showSpotlight(0, tbH, W * 0.5, H - tbH - 4);
-      },
-      lines: [
-        { t: '── EL CANVAS ──', cls: 'ob-section-title', d: 180 },
-        { t: '', d: 40 },
-        { t: 'Aquí viven tus agentes de IA.', cls: 'ob-desc', d: 100, spd: 18 },
-        { t: 'Cada nodo = un agente con:', cls: 'ob-desc', d: 70,  spd: 16 },
-        { t: '  · modelo de IA propio', cls: 'ob-desc', d: 50,  spd: 16 },
-        { t: '  · prompt / instrucciones', cls: 'ob-desc', d: 40,  spd: 16 },
-        { t: '  · inputs y outputs tipados', cls: 'ob-desc', d: 40,  spd: 16 },
-        { t: '', d: 40 },
-        { t: 'Conéctalos: la salida de un agente', cls: 'ob-desc', d: 80,  spd: 16 },
-        { t: 'alimenta la entrada del siguiente.', cls: 'ob-desc', d: 50,  spd: 16 },
-        { t: '', d: 40 },
-        { t: '↔  Scroll para zoom · Drag para mover', cls: 'ob-sub', d: 160, spd: 15 },
-      ],
-      pause: 2000,
-      beforeShow: null,
-      afterHide: null,
-    },
-    {
-      id: 'sidebar',
-      statusLabel: 'mostrando panel de agentes...',
-      titleLabel: '◀ PANEL DE AGENTES & SKILLS ▶',
-      moveLogwin: posSidebar,
-      spotlight: () => {
-        // sidebar slides in to x=0, width 242px
-        showSpotlight(0, 0, 248, window.innerHeight);
-      },
-      lines: [
-        { t: '── PANEL DE AGENTES ──', cls: 'ob-section-title', d: 180 },
-        { t: '', d: 40 },
-        { t: 'Arrastra agentes al canvas:', cls: 'ob-desc', d: 100, spd: 18 },
-        { t: '  ● Piloto    → coordina subagentes', cls: 'ob-desc', d: 70,  spd: 14 },
-        { t: '  ● Prompt    → procesa con IA', cls: 'ob-desc', d: 55,  spd: 14 },
-        { t: '  ● Imagen    → genera imágenes', cls: 'ob-desc', d: 55,  spd: 14 },
-        { t: '  ● Operador  → espera input humano', cls: 'ob-desc', d: 55,  spd: 14 },
-        { t: '', d: 40 },
-        { t: 'Skills → capacidades extra:', cls: 'ob-desc', d: 80,  spd: 16 },
-        { t: '  web_search · email · notion · MCP…', cls: 'ob-sub', d: 60,  spd: 14 },
-      ],
-      pause: 1800,
-      beforeShow: () => {
-        // Open sidebar and raise above overlay so it's actually visible
-        const ps = $('pside');
-        if (!ps) return;
-        ps.classList.add('open');
-        ps.style.zIndex = '9997'; // just below overlay (9998) — visible through 35% opacity
-      },
-      afterHide: () => {
-        const ps = $('pside');
-        if (!ps) return;
-        ps.classList.remove('open');
-        ps.style.zIndex = '';
-      },
-    },
-  ];
-
-  async function runTour() {
-    // Lighten overlay so the UI underneath is visible (35% dim)
-    setOverlayOpacity(0.35);
+  async function runBuildCanvas() {
+    // Show canvas, terminal goes bottom-left compact
+    setOverlayOpacity(0.10);
     await sleep(350);
-
-    for (const sec of TOUR_SECTIONS) {
-      // optional pre-hook (e.g. open sidebar)
-      if (sec.beforeShow) { sec.beforeShow(); await sleep(260); }
-
-      // move terminal to position
-      sec.moveLogwin();
-      await sleep(700);
-
-      // spotlight around target area
-      sec.spotlight();
-      await sleep(160);
-
-      // update live status & title bar
-      setLiveStatus(sec.statusLabel);
-      setTitle(sec.titleLabel);
-
-      // type content
-      const ob = getOb();
-      ob.innerHTML = '';
-      await typeLines(ob, sec.lines);
-
-      // hold so user can read
-      await sleep(sec.pause);
-
-      // cleanup spotlight
-      hideSpotlight();
-      await sleep(360);
-
-      // optional post-hook (e.g. close sidebar)
-      if (sec.afterHide) { sec.afterHide(); await sleep(260); }
-    }
-
-    // ── TOUR COMPLETE ────────────────────────────────
-    setOverlayOpacity(0.75);
-    posCenter(275);
-    setTitle('Log Global — Pipeline');
-    setLiveStatus('tour completado ✓');
-    await sleep(720);
+    posBottomLeft(240);
+    setLiveStatus('construyendo pipeline...');
+    setTitle('Pipeline · Videos de animales bailando');
+    await sleep(700);
 
     const ob = getOb();
     ob.innerHTML = '';
 
     await typeLines(ob, [
-      { t: '── ¡TOUR COMPLETADO! ──', cls: 'ob-section-title', d: 200 },
-      { t: '', d: 50 },
-      { t: 'Ya conoces el workspace.', cls: 'ob-desc', d: 150, spd: 20 },
-      { t: 'Ahora vamos a crear tu primer agente', cls: 'ob-desc', d: 100, spd: 20 },
-      { t: 'y verás la IA trabajando en tiempo real.', cls: 'ob-desc', d: 80,  spd: 20 },
-      { t: '', d: 60 },
-      { t: '⬡  Agente Piloto — listo para despegar.', cls: 'ob-hint', d: 280, spd: 22 },
-    ]);
-
-    await sleep(280);
-    ob.appendChild(makeProgress(1));
-    await sleep(200);
-    ob.appendChild(makeButtons('✕ Omitir', 'Crear mi primer agente →', () => window._ob.next()));
-    scrollBot();
-  }
-
-  /* ══════════════════════════════════════════════════════
-     PHASE 3 — AGENT CREATION
-  ══════════════════════════════════════════════════════ */
-
-  // Compact terminal at bottom-left so modal is visible center
-  function posPhase3() {
-    applyPos({
-      position : 'fixed',
-      left     : mob() ? '2%' : '16px',
-      bottom   : '16px',
-      top      : 'auto',
-      right    : 'auto',
-      transform: 'none',
-      width    : mob() ? '96vw' : '420px',
-      height   : '210px',
-      zIndex   : '10002',
-    });
-  }
-
-  // Type text character by character into a form element, triggering oninput
-  async function typeField(el, text, speed = 55) {
-    if (!el) return;
-    el.focus();
-    el.value = '';
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    await sleep(120);
-    for (const ch of text) {
-      el.value += ch;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      await sleep(speed + Math.random() * 20);
-    }
-    el.blur();
-    await sleep(180);
-  }
-
-  async function runAgentCreation() {
-    // ── 1. Full UI visible, terminal goes compact bottom-left
-    setOverlayOpacity(0);
-    await sleep(350);
-    hideOverlay();
-
-    posPhase3();
-    setLiveStatus('creando agente piloto...');
-    setTitle('Log Global — Pipeline');
-    await sleep(720);
-
-    // ── 2. Narrate node creation
-    const ob = getOb();
-    ob.innerHTML = '';
-
-    await typeLines(ob, [
-      { t: '── CREANDO AGENTE PILOTO ──', cls: 'ob-section-title', d: 150 },
-      { t: '', d: 30 },
-      { t: '> Añadiendo nodo al canvas...', color: '#8a7040', d: 100, spd: 18 },
-    ]);
-
-    // ── 3. Create node
-    let newNode = null;
-    if (typeof addNodeCenter === 'function') newNode = addNodeCenter('pilot');
-    _pilotNode = newNode; // save for Phase 4
-    if (typeof fitAll === 'function') setTimeout(fitAll, 300);
-
-    await sleep(500);
-
-    const okLine = document.createElement('div');
-    okLine.className = 'ob-init-line';
-    okLine.style.color = '#5a9a5a';
-    ob.appendChild(okLine);
-    await typeInto(okLine, '> ✓ Nodo "Agente Piloto" creado.', 18);
-    scrollBot();
-
-    await sleep(450);
-
-    const openLine = document.createElement('div');
-    openLine.className = 'ob-init-line';
-    openLine.style.color = '#8a7040';
-    ob.appendChild(openLine);
-    await typeInto(openLine, '> Abriendo configuración...', 18);
-
-    // ── 4. Open modal
-    await sleep(400);
-    if (newNode && typeof openM === 'function') openM(newNode.id);
-    await sleep(750);
-
-    // ── 5. Fill form fields with typewriter
-    setLiveStatus('configurando agente...');
-    ob.innerHTML = '';
-
-    await typeLines(ob, [
-      { t: '── CONFIGURANDO AGENTE ──', cls: 'ob-section-title', d: 100 },
+      { t: '── EJEMPLO DE PIPELINE ──', cls: 'ob-section-title', d: 120 },
       { t: '', d: 25 },
+      { t: 'Prompt → Piloto → Escritor → Img Gen', color: '#c8a040', d: 80, spd: 14 },
+      { t: '       → Video Gen → Digestor (15s)', color: '#4a8abf', d: 80, spd: 14 },
+      { t: '', d: 30 },
     ]);
 
-    const FIELDS = [
-      {
-        label: 'nombre',
-        get: () => document.querySelector('#mbody input.fi'),
-        value: 'Agente Piloto',
-        spd: 65,
-      },
-      {
-        label: 'instrucciones',
-        get: () => document.querySelectorAll('#mbody textarea.fi')[0],
-        value: 'Eres el agente coordinador principal. Delega tareas a subagentes, monitorea su progreso y consolida resultados. Output JSON.',
-        spd: 20,
-      },
-      {
-        label: 'verificación automática',
-        get: () => document.querySelectorAll('#mbody textarea.fi')[1],
-        value: 'Todos los subagentes deben reportar estado OK.',
-        spd: 36,
-      },
-      {
-        label: 'timeout',
-        get: () => document.querySelectorAll('#mbody input[type="number"]')[0],
-        value: '30',
-        spd: 180,
-      },
-      {
-        label: 'reintentos',
-        get: () => document.querySelectorAll('#mbody input[type="number"]')[1],
-        value: '3',
-        spd: 250,
-      },
+    // Build the canvas
+    _cv = buildObVideoCanvas();
+    await sleep(300);
+    if (typeof fitAll === 'function') fitAll();
+    await sleep(900);
+
+    // Narrate each agent with a flash
+    const STEPS = [
+      { key: 'pilot',    color: '#c85050', msg: '> ◈ Piloto — coordina todos los agentes' },
+      { key: 'writer',   color: '#c8a040', msg: '> ✦ Escritor — genera guión de 3 escenas' },
+      { key: 'imggen',   color: '#8a5abf', msg: '> ⬡ Img Gen — 3 imágenes en paralelo' },
+      { key: 'video',    color: '#4a8abf', msg: '> ▶ Video Gen — 3 clips de 5s en paralelo' },
+      { key: 'assembly', color: '#c87840', msg: '> ⊞ Digestor — une clips en video final' },
     ];
 
-    for (const field of FIELDS) {
-      // status line in terminal
-      const lbl = document.createElement('div');
-      lbl.className = 'ob-desc';
-      lbl.style.color = '#4a7abf';
-      lbl.textContent = `> completando "${field.label}"...`;
-      ob.appendChild(lbl);
+    for (const s of STEPS) {
+      await sleep(300);
+      flashNode(_cv[s.key], s.color, 1200);
+      const d = document.createElement('div');
+      d.className = 'ob-init-line'; d.style.color = s.color;
+      ob.appendChild(d);
+      await typeInto(d, s.msg, 13);
       scrollBot();
-
-      await typeField(field.get(), field.value, field.spd);
-
-      // mark done
-      lbl.style.color = '#5a9a5a';
-      lbl.textContent = `  ✓ ${field.label}`;
-      await sleep(200);
     }
 
-    await sleep(400);
-    ob.appendChild(document.createElement('br'));
-
-    const cfgDone = document.createElement('div');
-    cfgDone.className = 'ob-hint';
-    ob.appendChild(cfgDone);
-    await typeInto(cfgDone, '✓ Agente configurado y listo.', 30);
+    await sleep(500);
+    const done = document.createElement('div'); done.className = 'ob-hint'; ob.appendChild(done);
+    await typeInto(done, '⬡ Pipeline de video listo en el canvas.', 24);
     scrollBot();
 
+    await sleep(400);
+    ob.appendChild(makeProgress(1));
+    await sleep(180);
+    ob.appendChild(makeButtons('✕ Omitir', 'Escribir prompt →', () => window._ob.next()));
+    scrollBot();
+  }
+
+  /* ══════════════════════════════════════════════════════
+     PHASE 3 — ESCRIBIR EL PROMPT + EJECUTAR
+  ══════════════════════════════════════════════════════ */
+  async function runPromptDemo() {
+    posBottomLeft(250);
+    setLiveStatus('escribiendo prompt...');
+    setTitle('◉ Prompt semilla');
+    await sleep(400);
+
+    const ob = getOb();
+    ob.innerHTML = '';
+
+    await typeLines(ob, [
+      { t: '── ESCRIBE TU IDEA ──', cls: 'ob-section-title', d: 100 },
+      { t: '', d: 20 },
+      { t: '> Todo empieza con un prompt...', color: '#706860', d: 140, spd: 18 },
+      { t: '> El resto lo hace Pipeline automáticamente.', color: '#706860', d: 300, spd: 16 },
+    ]);
+
+    // Pan camera to seed card
+    if (_cv.seedCard) {
+      const sc_ = _cv.seedCard;
+      await panTo(sc_.x + 110, sc_.y + 60, 1.15, 900);
+      await sleep(350);
+    }
+
+    // Spotlight the seed card
+    if (_cv.seedCard) {
+      const el = document.getElementById(_cv.seedCard.id);
+      if (el) {
+        const r = el.getBoundingClientRect();
+        showSpotlight(r.left - 14, r.top - 14, r.width + 28, r.height + 28);
+      }
+    }
+    await sleep(400);
+
+    const line2 = document.createElement('div');
+    line2.className = 'ob-desc'; line2.style.color = '#c8a040';
+    ob.appendChild(line2);
+    await typeInto(line2, '> Escribe: "Videos de animales bailando"', 17);
+    scrollBot();
     await sleep(500);
+
+    // Type into the textarea
+    const PROMPT = 'Videos de animales bailando';
+    if (_cv.seedCard) {
+      const cardEl = document.getElementById(_cv.seedCard.id);
+      const ta = cardEl && cardEl.querySelector('.idc-textarea');
+      if (ta) {
+        ta.focus();
+        ta.value = '';
+        for (const ch of PROMPT) {
+          ta.value += ch;
+          ta.dispatchEvent(new Event('input', { bubbles: true }));
+          await sleep(55 + Math.random() * 18);
+        }
+        _cv.seedCard.content = PROMPT;
+        await sleep(400);
+        ta.blur();
+      }
+    }
+
+    hideSpotlight();
+    await sleep(250);
+
+    // Highlight EJECUTAR button
+    if (_cv.seedCard) {
+      const cardEl = document.getElementById(_cv.seedCard.id);
+      const btn = cardEl && cardEl.querySelector('.sic-run-btn');
+      if (btn) {
+        const r = btn.getBoundingClientRect();
+        showSpotlight(r.left - 10, r.top - 10, r.width + 20, r.height + 20);
+        btn.style.transition = 'all .3s';
+        btn.style.boxShadow = '0 0 0 3px #c8a04099, 0 0 24px #c8a04055';
+        btn.style.background = '#c8a040';
+        btn.style.color = '#1a1208';
+
+        const line3 = document.createElement('div');
+        line3.className = 'ob-desc'; line3.style.color = '#5a9a5a';
+        ob.appendChild(line3);
+        await typeInto(line3, '> ▶ EJECUTAR — lanza el pipeline completo', 18);
+        scrollBot();
+        await sleep(700);
+
+        // Click animation
+        btn.style.transform = 'scale(.94)';
+        await sleep(130);
+        btn.style.transform = '';
+        await sleep(300);
+
+        btn.style.boxShadow = '';
+        btn.style.background = '';
+        btn.style.color = '';
+      }
+    }
+
+    hideSpotlight();
+    await sleep(350);
+
     ob.appendChild(makeProgress(2));
     await sleep(180);
-    ob.appendChild(makeButtons(
-      '✕ Omitir',
-      '▶ Iniciar agente',
-      () => runAgentSimulation(newNode),
-    ));
-
+    ob.appendChild(makeButtons('✕ Omitir', 'Ver cómo funciona →', () => window._ob.next()));
     scrollBot();
   }
 
   /* ══════════════════════════════════════════════════════
-     PHASE 3b — AGENT RUN SIMULATION
+     PHASE 4 — HISTORIA DEL PIPELINE
+     Narra cada paso, explica 10 min y resultado video
   ══════════════════════════════════════════════════════ */
-  async function runAgentSimulation(newNode) {
-    // Close modal and expand terminal
-    if (typeof closeM === 'function') closeM();
-    await sleep(300);
-
-    // Expand terminal to see logs better
-    posCenter(340);
-    setLiveStatus('agente ejecutando...');
-    await sleep(650);
-
-    const ob = getOb();
-    ob.innerHTML = '';
-
-    // Mark node as running
-    if (newNode && typeof setStatus === 'function') setStatus(newNode.id, 'running');
-
-    const RUN_LOGS = [
-      { t: '── AGENTE EN EJECUCIÓN LIVE ──', cls: 'ob-section-title', d: 100 },
-      { t: '', d: 30 },
-      { t: '> Iniciando Agente Piloto...', color: '#c8a040', d: 180, spd: 20 },
-      { t: '> Analizando pipeline y conexiones...', color: '#8a7040', d: 450, spd: 17 },
-      { t: '> Verificando inputs disponibles...', color: '#8a7040', d: 550, spd: 17 },
-      { t: '> Delegando subtareas a subagentes...', color: '#8a7040', d: 700, spd: 17 },
-      { t: '> Procesando con claude-sonnet-4...', color: '#4a7abf', d: 850, spd: 17 },
-      { t: '> Consolidando resultados JSON...', color: '#8a7040', d: 1100, spd: 17 },
-      { t: '', d: 80 },
-      { t: '  entrada  →  "Produce video pipeline"', color: '#5a6a8a', d: 200, spd: 14 },
-      { t: '  salida   →  { status:"ok", tasks:3 }', color: '#5a9a5a', d: 200, spd: 14 },
-      { t: '  tiempo   →  3.2s', color: '#5a5a5a', d: 100, spd: 14 },
-      { t: '', d: 80 },
-      { t: '✓ Ejecución completada exitosamente.', color: '#5a9a5a', d: 350, spd: 22 },
-    ];
-
-    await typeLines(ob, RUN_LOGS);
-
-    if (newNode && typeof setStatus === 'function') setStatus(newNode.id, 'done');
-
-    await sleep(500);
-
-    // ── FINAL CELEBRATION
-    const sep = document.createElement('div');
-    sep.className = 'ob-sep';
-    ob.appendChild(sep);
-    await sleep(200);
-
-    const FINAL = [
-      { t: '★ ¡Tu primer agente funcionó!', cls: 'ob-h1', d: 400, spd: 40 },
-      { t: '', d: 40 },
-      { t: 'Ya sabes crear, configurar y ejecutar', cls: 'ob-desc', d: 100, spd: 20 },
-      { t: 'agentes de IA en Pipeline.', cls: 'ob-desc', d: 60,  spd: 20 },
-      { t: '', d: 50 },
-      { t: 'Ahora construye tu primer pipeline real.', cls: 'ob-hint', d: 120, spd: 20 },
-    ];
-
-    for (const m of FINAL) {
-      await sleep(m.d || 60);
-      if (!m.t) { ob.appendChild(document.createElement('br')); continue; }
-      const d = document.createElement('div');
-      d.className = m.cls || 'ob-desc';
-      ob.appendChild(d);
-      await typeInto(d, m.t, m.spd || 20);
-      scrollBot();
-    }
-
-    await sleep(350);
-
-    await sleep(280);
-    ob.appendChild(makeProgress(3));
-    await sleep(180);
-    ob.appendChild(makeButtons(
-      '✕ Finalizar',
-      'Crear pipeline completo →',
-      () => window._ob.next(),
-    ));
-    scrollBot();
-  }
-
-  /* ══════════════════════════════════════════════════════
-     PHASE 4 — PIPELINE CONNECTION DEMO
-  ══════════════════════════════════════════════════════ */
-  async function runPipelineDemo() {
-    // Compact terminal bottom-left, UI fully visible
-    hideOverlay();
-    posPhase3();
-    setLiveStatus('creando segundo agente...');
-    await sleep(700);
-
-    const ob = getOb();
-    ob.innerHTML = '';
-
-    await typeLines(ob, [
-      { t: '── PIPELINE CON 2 AGENTES ──', cls: 'ob-section-title', d: 150 },
-      { t: '', d: 30 },
-      { t: '> Un agente solo es poderoso...', color: '#706860', d: 200, spd: 22 },
-      { t: '> Dos conectados son un pipeline.', color: '#c8a040', d: 380, spd: 20 },
-      { t: '', d: 50 },
-      { t: '> Añadiendo "Agente Investigación"...', color: '#8a7040', d: 200, spd: 18 },
-    ]);
-
-    // ── Create research node relative to pilot
-    if (_pilotNode && typeof addNode === 'function') {
-      _researchNode = addNode('research', _pilotNode.x + 360, _pilotNode.y + 160);
-    } else if (typeof addNodeCenter === 'function') {
-      _researchNode = addNodeCenter('research');
-    }
-    if (typeof fitAll === 'function') setTimeout(fitAll, 350);
-    await sleep(650);
-
-    const r1 = document.createElement('div');
-    r1.className = 'ob-init-line'; r1.style.color = '#5a9a5a';
-    ob.appendChild(r1);
-    await typeInto(r1, '> ✓ Agente Investigación creado.', 18);
-    scrollBot();
-
-    await sleep(450);
-
-    // ── Connect pilot → research
-    const cline = document.createElement('div');
-    cline.className = 'ob-init-line'; cline.style.color = '#8a7040';
-    ob.appendChild(cline);
-    await typeInto(cline, '> Conectando: Piloto → Investigación...', 18);
-    scrollBot();
-
-    await sleep(420);
-
-    if (_pilotNode && _researchNode) {
-      const nc = {
-        id: 'c' + Math.random().toString(36).slice(2, 10),
-        from: _pilotNode.id, fp: 'out',
-        to: _researchNode.id, tp: 'in',
-        active: false, cond: false, condT: 'no', fromCard: false,
-      };
-      conns.push(nc);
-      if (typeof drawConns === 'function') drawConns();
-      // animate newly drawn path
-      setTimeout(() => {
-        document.querySelectorAll('.cpath:not(._ob_done)').forEach(p => {
-          p.classList.add('cpath-draw', '_ob_done');
-          setTimeout(() => p.classList.remove('cpath-draw'), 900);
-        });
-      }, 80);
-      if (typeof updateMM === 'function') updateMM();
-    }
-
-    await sleep(700);
-
-    const r2 = document.createElement('div');
-    r2.className = 'ob-init-line'; r2.style.color = '#5a9a5a';
-    ob.appendChild(r2);
-    await typeInto(r2, '> ✓ Conexión establecida.', 18);
-    scrollBot();
-
-    await sleep(400);
-    ob.appendChild(document.createElement('br'));
-    const pipeMsg = document.createElement('div');
-    pipeMsg.className = 'ob-hint';
-    ob.appendChild(pipeMsg);
-    await typeInto(pipeMsg, '⬡ Pipeline de 2 agentes listo.', 26);
-    scrollBot();
-
-    await sleep(450);
-    ob.appendChild(makeProgress(3));
-    await sleep(180);
-    ob.appendChild(makeButtons(
-      '✕ Finalizar',
-      '▶ Ejecutar pipeline',
-      () => runFullPipeline(),
-    ));
-    scrollBot();
-  }
-
-  /* ── Phase 4b: Full pipeline simulation ──────────────── */
-  async function runFullPipeline() {
-    posCenter(380);
+  async function runPipelineStory() {
+    posCenter(460);
+    setOverlayOpacity(0.75);
     setLiveStatus('pipeline ejecutando...');
-    await sleep(660);
+    setTitle('▶ PIPELINE EN PROGRESO');
+    await sleep(700);
 
     const ob = getOb();
     ob.innerHTML = '';
 
-    if (_pilotNode && typeof setStatus === 'function') setStatus(_pilotNode.id, 'running');
-
     await typeLines(ob, [
-      { t: '── PIPELINE EN EJECUCIÓN LIVE ──', cls: 'ob-section-title', d: 100 },
-      { t: '', d: 30 },
-      { t: '  2 agentes · 1 conexión · modo automático', cls: 'ob-sub', d: 100, spd: 14 },
-      { t: '', d: 40 },
-      { t: '[1/2] Agente Piloto — iniciando...', color: '#c8a040', d: 200, spd: 18 },
-      { t: '      > Analizando pipeline...', color: '#8a7040', d: 480, spd: 16 },
-      { t: '      > Delegando subtareas...', color: '#8a7040', d: 580, spd: 16 },
-      { t: '      ✓ Piloto completado — 1.8s', color: '#5a9a5a', d: 650, spd: 18 },
-      { t: '', d: 50 },
+      { t: '── FLUJO DEL PIPELINE ──', cls: 'ob-section-title', d: 80 },
+      { t: '', d: 20 },
+      { t: '  Prompt: "Videos de animales bailando"', cls: 'ob-sub', d: 60, spd: 13 },
+      { t: '', d: 20 },
     ]);
 
-    if (_pilotNode && typeof setStatus === 'function') setStatus(_pilotNode.id, 'done');
-    if (_researchNode && typeof setStatus === 'function') setStatus(_researchNode.id, 'running');
-
+    // [1] Pilot
+    if (_cv.pilot && typeof setStatus === 'function') setStatus(_cv.pilot.id, 'running');
+    flashNode(_cv.pilot, '#c85050', 2500);
     await typeLines(ob, [
-      { t: '[2/2] Agente Investigación — recibiendo...', color: '#c8a040', d: 100, spd: 18 },
-      { t: '      entrada: { status:"ok", tasks:3 }', color: '#5a6a8a', d: 280, spd: 14 },
-      { t: '      > Procesando investigación...', color: '#8a7040', d: 680, spd: 16 },
-      { t: '      > Generando ideas rankadas...', color: '#8a7040', d: 780, spd: 16 },
-      { t: '      ✓ Investigación lista — 2.4s', color: '#5a9a5a', d: 580, spd: 18 },
+      { t: '[1] Piloto — analizando prompt...', color: '#c85050', d: 160, spd: 16 },
+      { t: '    ↳ Estructura: 3 escenas × 5s = 15s', color: '#8a7040', d: 550, spd: 14 },
+      { t: '    ↳ Genera contexto del pipeline', color: '#8a7040', d: 350, spd: 14 },
+      { t: '    ✓ Contexto listo', color: '#5a9a5a', d: 350, spd: 15 },
     ]);
+    if (_cv.pilot && typeof setStatus === 'function') setStatus(_cv.pilot.id, 'done');
+    await sleep(180);
 
-    if (_researchNode && typeof setStatus === 'function') setStatus(_researchNode.id, 'done');
+    // [2] Writer
+    if (_cv.writer && typeof setStatus === 'function') setStatus(_cv.writer.id, 'running');
+    flashNode(_cv.writer, '#c8a040', 2500);
+    await typeLines(ob, [
+      { t: '[2] Escritor — generando guión de 3 escenas...', color: '#c8a040', d: 80, spd: 16 },
+      { t: '    Esc. 1: Oso polar bailando en la nieve', color: '#6a5a40', d: 500, spd: 12 },
+      { t: '    Esc. 2: Flamencos en sincronía tropical', color: '#6a5a40', d: 360, spd: 12 },
+      { t: '    Esc. 3: Pulpo breakdancer en el mar', color: '#6a5a40', d: 360, spd: 12 },
+      { t: '    ✓ 3 escenas escritas', color: '#5a9a5a', d: 280, spd: 15 },
+    ]);
+    if (_cv.writer && typeof setStatus === 'function') setStatus(_cv.writer.id, 'done');
+    await sleep(180);
 
-    await sleep(350);
-    ob.appendChild(document.createElement('br'));
+    // [3] Img Gen ×3 parallel
+    if (_cv.imggen && typeof setStatus === 'function') setStatus(_cv.imggen.id, 'running');
+    flashNode(_cv.imggen, '#8a5abf', 2800);
+    await typeLines(ob, [
+      { t: '[3] Img Gen — 3 imágenes en paralelo...', color: '#8a5abf', d: 80, spd: 16 },
+      { t: '    ⬡ Imagen 1 · generando...', color: '#5a406a', d: 300, spd: 12 },
+      { t: '    ⬡ Imagen 2 · generando...', color: '#5a406a', d: 180, spd: 12 },
+      { t: '    ⬡ Imagen 3 · generando...', color: '#5a406a', d: 180, spd: 12 },
+      { t: '    ✓ 3 imágenes listas  (máx. 3 paralelas)', color: '#5a9a5a', d: 750, spd: 14 },
+    ]);
+    if (_cv.imggen && typeof setStatus === 'function') setStatus(_cv.imggen.id, 'done');
+    await sleep(180);
 
-    const totLine = document.createElement('div');
-    totLine.style.color = '#5a9a5a';
-    totLine.className = 'ob-desc';
-    ob.appendChild(totLine);
-    await typeInto(totLine, 'Pipeline completado — 4.2s · nodos: 2/2 ✓', 16);
-    scrollBot();
+    // [4] Video Gen ×3 parallel
+    if (_cv.video && typeof setStatus === 'function') setStatus(_cv.video.id, 'running');
+    flashNode(_cv.video, '#4a8abf', 2800);
+    await typeLines(ob, [
+      { t: '[4] Video Gen — 3 clips de 5s en paralelo...', color: '#4a8abf', d: 80, spd: 16 },
+      { t: '    ▶ Clip 1: imagen + contexto → 5s video', color: '#3a506a', d: 340, spd: 12 },
+      { t: '    ▶ Clip 2: imagen + contexto → 5s video', color: '#3a506a', d: 200, spd: 12 },
+      { t: '    ▶ Clip 3: imagen + contexto → 5s video', color: '#3a506a', d: 200, spd: 12 },
+      { t: '    ✓ 3 clips listos  (máx. 3 paralelos)', color: '#5a9a5a', d: 800, spd: 14 },
+    ]);
+    if (_cv.video && typeof setStatus === 'function') setStatus(_cv.video.id, 'done');
+    await sleep(180);
 
-    await sleep(500);
+    // [5] Assembly
+    if (_cv.assembly && typeof setStatus === 'function') setStatus(_cv.assembly.id, 'running');
+    flashNode(_cv.assembly, '#c87840', 2000);
+    await typeLines(ob, [
+      { t: '[5] Digestor — ensamblando video final...', color: '#c87840', d: 80, spd: 16 },
+      { t: '    3 clips × 5s → video de 15 segundos', color: '#6a4820', d: 600, spd: 13 },
+      { t: '    ✓ VIDEO FINAL LISTO', color: '#5a9a5a', d: 380, spd: 18 },
+    ]);
+    if (_cv.assembly && typeof setStatus === 'function') setStatus(_cv.assembly.id, 'done');
 
-    const sep2 = document.createElement('div');
-    sep2.className = 'ob-sep';
-    ob.appendChild(sep2);
+    await sleep(380);
+    const sep = document.createElement('div'); sep.className = 'ob-sep'; ob.appendChild(sep);
     await sleep(200);
 
-    // ── FINAL
-    const FINISH = [
-      { t: '★ ¡Pipeline completo y funcionando!', cls: 'ob-h1', d: 400, spd: 36 },
-      { t: '', d: 40 },
-      { t: 'Ya dominas Pipeline:', cls: 'ob-desc', d: 100, spd: 20 },
-      { t: '  · Crear agentes con modelos y prompts', cls: 'ob-desc', d: 60, spd: 16 },
-      { t: '  · Conectarlos en cadenas automáticas', cls: 'ob-desc', d: 50, spd: 16 },
-      { t: '  · Ejecutar pipelines completos de IA', cls: 'ob-desc', d: 50, spd: 16 },
-      { t: '', d: 50 },
-      { t: 'Ahora construye el tuyo. ¡Mucho éxito!', cls: 'ob-hint', d: 200, spd: 20 },
-    ];
+    // Time + result
+    await typeLines(ob, [
+      { t: '⏱  Este pipeline puede tardar hasta 10 minutos', cls: 'ob-hint', d: 280, spd: 20 },
+      { t: '', d: 35 },
+      { t: '⬡  Resultado: un video de 15s generado con IA', cls: 'ob-hint', d: 200, spd: 20 },
+      { t: '', d: 35 },
+      { t: 'Modelos gratis por defecto.', cls: 'ob-desc', d: 150, spd: 16 },
+      { t: 'Activa PRO para los modelos más capaces.', cls: 'ob-desc', d: 80, spd: 16 },
+    ]);
 
-    for (const m of FINISH) {
-      await sleep(m.d || 60);
-      if (!m.t) { ob.appendChild(document.createElement('br')); continue; }
-      const d = document.createElement('div');
-      d.className = m.cls || 'ob-desc';
-      ob.appendChild(d);
-      await typeInto(d, m.t, m.spd || 20);
-      scrollBot();
-    }
+    await sleep(380);
+    ob.appendChild(makeProgress(3));
+    await sleep(180);
 
-    await sleep(350);
     const endDiv = document.createElement('div');
     endDiv.className = 'ob-btns';
-    endDiv.innerHTML = `<button class="ob-btn-next" style="width:100%;padding:10px 16px"
+    endDiv.innerHTML = `<button class="ob-btn-next" style="width:100%;padding:10px 16px;font-size:11px"
       onclick="window._ob.finish()">⬡ Empezar a usar Pipeline</button>`;
     endDiv.style.opacity = '0';
     ob.appendChild(endDiv);
     await sleep(60);
-    endDiv.style.transition = 'opacity .5s';
-    endDiv.style.opacity = '1';
+    endDiv.style.transition = 'opacity .5s'; endDiv.style.opacity = '1';
     scrollBot();
   }
 
@@ -934,22 +734,17 @@
   ══════════════════════════════════════════════════════ */
   function startOnboarding() {
     if (_active) return;
-    _active = true;
-    _step = 0;
+    _active = true; _step = 0;
 
     showOverlay(0.82);
-
     setTimeout(() => {
       posCenter(480);
-      const w = $('logwin');
-      if (w) w.style.display = 'flex';
+      const w = $('logwin'); if (w) w.style.display = 'flex';
     }, 80);
-
     setTimeout(() => {
-      setBadgeLive();
-      setLiveTab();
-      $('log-inputrow').style.display = 'none';
-      const qb = $('log-quickbtns'); if (qb) qb.style.display = 'none';
+      setBadgeLive(); setLiveTab();
+      const inp = $('log-inputrow'); if (inp) inp.style.display = 'none';
+      const qb  = $('log-quickbtns'); if (qb) qb.style.display = 'none';
       mountObody();
       runWelcome();
     }, 680);
@@ -957,24 +752,22 @@
 
   function endOnboarding(keepState) {
     _active = false;
-    hideOverlay();
-    hideSpotlight();
+    hideOverlay(); hideSpotlight();
     if (!keepState) restoreLogwin();
-    restoreBadge();
-    restoreFilters();
-    restoreTitle();
+    restoreBadge(); restoreFilters(); restoreTitle();
 
     const ob = $('ob-body');
     if (ob) {
-      ob.style.transition = 'opacity .3s';
-      ob.style.opacity = '0';
+      ob.style.transition = 'opacity .3s'; ob.style.opacity = '0';
       setTimeout(() => ob && ob.remove(), 320);
     }
     setTimeout(() => {
-      const inp = $('log-inputrow');
-      if (inp) inp.style.display = '';
-      const qb = $('log-quickbtns'); if (qb) qb.style.display = '';
+      const inp = $('log-inputrow'); if (inp) inp.style.display = '';
+      const qb  = $('log-quickbtns'); if (qb) qb.style.display = '';
     }, 520);
+
+    // After onboarding ends, fit canvas so user sees the full pipeline
+    setTimeout(() => { if (typeof fitAll === 'function') fitAll(); }, 700);
   }
 
   /* ── public API ─────────────────────────────────────── */
@@ -984,9 +777,9 @@
     finish() { markDone(); endOnboarding(); },
     next() {
       _step++;
-      if      (_step === 1) runTour();
-      else if (_step === 2) runAgentCreation();
-      else if (_step === 3) runPipelineDemo();  // called after Phase 3b simulation
+      if      (_step === 1) runBuildCanvas();
+      else if (_step === 2) runPromptDemo();
+      else if (_step === 3) runPipelineStory();
       else                  { markDone(); endOnboarding(); }
     },
     replay() {

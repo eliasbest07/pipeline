@@ -91,6 +91,12 @@ function escapeHTML(v){
 // ═══════════════════════════════════════
 let nodes=[],conns=[],outputCards=[],nid=1,ocid=1,cid=1;
 let currentPipelineId=null;
+const PINNED_EXAMPLE_PIPELINE={
+  id:'8136f2b6-4d89-4fb1-a9ac-32f92fc37c8b',
+  name:'Videos 12seg',
+  created_at:'2026-03-31 17:08:48',
+  isExample:true
+};
 // ── Terminal / agentes en vivo ──────────────────────────────
 let terminalPipelineId=null;
 let sseConnection=null;
@@ -607,6 +613,22 @@ function modelSelectHTML(n){
   return`<select class="n-model-sel" id="msel_${n.id}" onchange="event.stopPropagation();setNodeModel('${n.id}',this.value)" onclick="event.stopPropagation()">${opts}</select>`;
 }
 
+function ensureRuntimeModelOption(sel,provider,model,labelPrefix='real'){
+  if(!sel||!provider||!model)return;
+  const value=`${provider}||${model}`;
+  let opt=sel.querySelector(`option[value="${value}"]`);
+  if(!opt){
+    opt=document.createElement('option');
+    opt.value=value;
+    opt.textContent=`[${labelPrefix}] ${provider}/${model}`;
+    opt.dataset.runtime='1';
+    sel.prepend(opt);
+  }else if(labelPrefix&&opt.dataset.runtime==='1'){
+    opt.textContent=`[${labelPrefix}] ${provider}/${model}`;
+  }
+  sel.value=value;
+}
+
 function addNode(type,x,y){
   const tp=T[type]||{};
   const isFirstPilot=type==='pilot'&&!nodes.some(n=>n.type==='pilot'||n.agentId==='AG-01');
@@ -1089,17 +1111,27 @@ function mkQuestionCard(opts){
     <div class="oc-inner">
       <div class="qcard-hd">
         <div class="qcard-icon">◎</div>
-        <div class="qcard-title">Operador — requiere input</div>
+        <div class="qcard-title-wrap">
+          <div class="qcard-title">Operador — requiere input</div>
+          <div class="qcard-subtitle">edita la respuesta o deja que se confirme sola</div>
+        </div>
       </div>
       <div class="qcard-body">
         <div class="qcard-q">${safeQ}</div>
-        <div class="qcard-suggest-lbl">sugerencia — se asumirá si no respondes</div>
-        <div class="qcard-suggest" id="qsug_${id}" onclick="document.getElementById('qinput_${id}').value='${safeSugVal}';document.getElementById('qinput_${id}').focus()">${safeSug}</div>
-        <textarea class="qcard-input" id="qinput_${id}" rows="2" placeholder="Escribe tu respuesta aquí...">${safeSugVal}</textarea>
+        <div class="qcard-row">
+          <div class="qcard-suggest-lbl">sugerencia inicial</div>
+          <button class="qcard-use-suggest" id="qusesug_${id}" type="button">usar sugerencia</button>
+        </div>
+        <div class="qcard-suggest" id="qsug_${id}">${safeSug}</div>
+        <div class="qcard-edit-lbl">respuesta editable</div>
+        <textarea class="qcard-input" id="qinput_${id}" rows="3" placeholder="Edita aquí la sugerencia o escribe una respuesta nueva...">${safeSugVal}</textarea>
       </div>
       <div class="qcard-progress-wrap">
-        <div class="qcard-timer-txt" id="qtimer_${id}"></div>
-        <div class="qcard-progress"><div class="qcard-progress-bar" id="qbar_${id}"></div></div>
+        <div class="qcard-countdown" id="qtimer_${id}">--</div>
+        <div class="qcard-progress-block">
+          <div class="qcard-progress-lbl">auto decidir en</div>
+          <div class="qcard-progress"><div class="qcard-progress-bar" id="qbar_${id}"></div></div>
+        </div>
       </div>
       <div class="qcard-ft">
         <button class="qcard-confirm" id="qconfirm_${id}">✓ Confirmar</button>
@@ -1125,6 +1157,20 @@ function mkQuestionCard(opts){
   document.getElementById('qinput_'+id).addEventListener('blur',()=>{
     oc._typingPaused=false;
   });
+  document.getElementById('qsug_'+id).addEventListener('click',()=>{
+    const input=document.getElementById('qinput_'+id);
+    if(!input)return;
+    input.value=opts.suggestion||'';
+    input.focus();
+    input.setSelectionRange(input.value.length,input.value.length);
+  });
+  document.getElementById('qusesug_'+id).addEventListener('click',()=>{
+    const input=document.getElementById('qinput_'+id);
+    if(!input)return;
+    input.value=opts.suggestion||'';
+    input.focus();
+    input.setSelectionRange(input.value.length,input.value.length);
+  });
   document.getElementById('qconfirm_'+id).addEventListener('click',()=>_resolveQuestion(id,true));
   document.getElementById('qskip_'+id).addEventListener('click',()=>_resolveQuestion(id,false));
 
@@ -1135,7 +1181,10 @@ function mkQuestionCard(opts){
       const idleFor=Date.now()-(oc._lastInputAt||0);
       if(idleFor<1200){
         const timerEl=document.getElementById('qtimer_'+id);
-        if(timerEl)timerEl.textContent='escribiendo…';
+        if(timerEl){
+          timerEl.textContent='...';
+          timerEl.classList.add('editing');
+        }
         return;
       }
       oc._typingPaused=false;
@@ -1144,8 +1193,14 @@ function mkQuestionCard(opts){
     const pct=remaining/timeout*100;
     const bar=document.getElementById('qbar_'+id);
     const timerEl=document.getElementById('qtimer_'+id);
+    const urgent=remaining<=5000;
     if(bar)bar.style.width=pct+'%';
-    if(timerEl)timerEl.textContent=Math.ceil(remaining/1000)+'s';
+    if(bar)bar.classList.toggle('urgent',urgent);
+    if(timerEl){
+      timerEl.textContent=Math.ceil(remaining/1000)+'s';
+      timerEl.classList.toggle('urgent',urgent);
+      timerEl.classList.remove('editing');
+    }
     if(remaining<=0){clearInterval(oc._timer);_resolveQuestion(id,false);}
   },250);
 
@@ -1259,16 +1314,27 @@ function getQuestionTimeoutMs(){
   return 18000;
 }
 
+function getQuestionCardSpawnPosition(editorNode){
+  const wrap=getWrapRectSafe()||{left:0,top:0};
+  const cardWidth=390;
+  const topOffset=92;
+  const sideOffset=34;
+  const viewportX=(window.innerWidth-cardWidth-sideOffset-wrap.left-px)/sc;
+  const viewportY=(topOffset-wrap.top-py)/sc;
+  if(!editorNode)return{x:viewportX,y:viewportY};
+  return{
+    x:Math.max(editorNode.x+260,viewportX),
+    y:Math.max(36,Math.min(editorNode.y-18,viewportY+90)),
+  };
+}
+
 function drainOperatorQuestionQueue(){
   if(getActiveQuestionCard())return;
   if(!operatorQuestionQueue.length)return;
   const question=operatorQuestionQueue.shift();
   if(!question)return;
   const editorNode=nodes.find(n=>n.type==='human'||n.agentId==='AG-05');
-  const vw=window.innerWidth,vh=window.innerHeight;
-  const cx=(vw/2-px)/sc,cy=(vh/2-py)/sc;
-  const baseX=editorNode ? (editorNode.x + 310) : (cx - 190);
-  const baseY=editorNode ? (editorNode.y + 10) : (cy - 150);
+  const spawnPos=getQuestionCardSpawnPosition(editorNode);
   return mkQuestionCard({
     questionId:question.public_id,
     question:question.question,
@@ -1277,8 +1343,8 @@ function drainOperatorQuestionQueue(){
     pipelineId:question.pipeline_id||currentPipelineId,
     fieldKey:question.field_key||question.metadata?.field_key||question.public_id,
     onAnswer:(answer,source)=>submitOperatorQuestionAnswer(question.public_id,answer,source),
-    x:baseX,
-    y:baseY,
+    x:spawnPos.x,
+    y:spawnPos.y,
   });
 }
 
@@ -1414,10 +1480,13 @@ function parseOutputCardContent(oc){
 }
 
 function getMediaCardData(oc){
+  const rawContent=typeof oc?.content==='string'?oc.content.trim():'';
   const parsed=parseOutputCardContent(oc);
   const meta=oc?.meta||{};
   const parsedResult=meta?.parsed_resultado||{};
   const nestedResult=parsed?.resultado||{};
+  const rawLooksImageUrl=oc?.type==='image'&&/^(data:|https?:\/\/|\/)/i.test(rawContent);
+  const rawLooksVideoUrl=oc?.type==='video'&&/^(https?:\/\/|\/)/i.test(rawContent);
   const imageUrl=
     parsed?.imagen_url||parsed?.image_url||parsed?.imagen_uri||parsed?.image_uri||
     parsed?.thumbnail_url||parsed?.poster_url||parsed?.frame_url||parsed?.preview_image||
@@ -1425,13 +1494,21 @@ function getMediaCardData(oc){
     nestedResult?.thumbnail_url||nestedResult?.poster_url||nestedResult?.frame_url||nestedResult?.preview_image||
     parsedResult?.imagen_url||parsedResult?.image_url||parsedResult?.imagen_uri||parsedResult?.image_uri||
     parsedResult?.thumbnail_url||parsedResult?.poster_url||parsedResult?.frame_url||parsedResult?.preview_image||
+    (rawLooksImageUrl?rawContent:'')||
     '';
   const videoUrl=
     parsed?.video_url||parsed?.clip_url||parsed?.video_uri||parsed?.mp4_url||parsed?.url||
     nestedResult?.video_url||nestedResult?.clip_url||nestedResult?.video_uri||nestedResult?.mp4_url||nestedResult?.url||
     parsedResult?.video_url||parsedResult?.clip_url||parsedResult?.video_uri||parsedResult?.mp4_url||parsedResult?.url||
+    (rawLooksVideoUrl?rawContent:'')||
     '';
-  const prompt=parsed?.prompt_usado||parsed?.prompt||nestedResult?.prompt_usado||nestedResult?.prompt||parsed?.asset?.prompt||parsedResult?.prompt_usado||parsedResult?.prompt||'';
+  const prompt=
+    parsed?.prompt_usado||parsed?.prompt||
+    nestedResult?.prompt_usado||nestedResult?.prompt||
+    parsed?.asset?.prompt||
+    parsedResult?.prompt_usado||parsedResult?.prompt||
+    meta?.prompt||meta?.prompt_usado||
+    '';
   return{
     parsed,
     imageUrl:typeof imageUrl==='string'?imageUrl:'',
@@ -2146,6 +2223,18 @@ function renderPipelineRunState(){
       timer.textContent='00:00';
     }
   }
+  // Seed-card run button: DETENER (blue) while running, EJECUTAR (gold) when idle
+  document.querySelectorAll('.sic-run-btn').forEach(btn=>{
+    if(active){
+      btn.textContent='■ DETENER';
+      btn.classList.add('sic-run-stopping');
+      btn.onclick=e=>{e.stopPropagation();stopAll();};
+    }else{
+      btn.textContent='▶ EJECUTAR';
+      btn.classList.remove('sic-run-stopping');
+      btn.onclick=e=>{e.stopPropagation();runAll();};
+    }
+  });
 }
 
 function startPipelineRunClock(startedAt){
@@ -3056,6 +3145,33 @@ function dropBackendOutputCard(output){
   return oc;
 }
 
+function dropBackendAssetCard(assetEvent){
+  const asset=assetEvent?.asset;
+  if(!asset||!asset.asset_id)return null;
+  const tipoAsset=String(asset.tipo_asset||assetEvent?.tipo_asset||'').toLowerCase();
+  const isImage=tipoAsset==='imagen';
+  const isVideo=tipoAsset==='video';
+  if(!isImage&&!isVideo)return null;
+  const contenido=typeof asset.contenido==='string'?asset.contenido.trim():'';
+  if(!contenido)return null;
+  return dropBackendOutputCard({
+    public_id:asset.asset_id,
+    agent_id:assetEvent.agent_id||asset.agente_sugerido||'AG-04',
+    tipo:isImage?'image':'video',
+    bloque:asset.bloque||assetEvent.bloque||'resultado',
+    contenido:JSON.stringify({
+      prompt_usado:asset.prompt||asset.metadata?.prompt_usado||'',
+      imagen_url:isImage?contenido:(asset.metadata?.imagen_url||asset.metadata?.escena_img_url||''),
+      video_url:isVideo?contenido:(asset.metadata?.video_url||''),
+    },null,2),
+    metadata:{
+      ...(asset.metadata||{}),
+      asset_id:asset.asset_id,
+      asset_tipo:asset.tipo_asset||assetEvent.tipo_asset||null,
+    },
+  });
+}
+
 function mapBackendOutputType(tipo){
   if(tipo==='image')return'image';
   if(tipo==='video')return'video';
@@ -3486,17 +3602,22 @@ async function loadPipelinesInSidebar(){
   if(!list)return;
   try{
     const pipelines=await fetch('/api/pipelines').then(r=>r.json());
-    if(!pipelines.length){list.innerHTML='<div class="ps-empty">Sin pipelines aún.<br>Escribe en la terminal qué quieres producir.</div>';return;}
-    list.innerHTML=pipelines.map(p=>{
+    const withPinned=[
+      PINNED_EXAMPLE_PIPELINE,
+      ...pipelines.filter(p=>p?.id&&p.id!==PINNED_EXAMPLE_PIPELINE.id)
+    ];
+    if(!withPinned.length){list.innerHTML='<div class="ps-empty">Sin pipelines aún.<br>Escribe en la terminal qué quieres producir.</div>';return;}
+    list.innerHTML=withPinned.map(p=>{
       const isCurrent=p.id===currentPipelineId;
-      const dot=isCurrent?'#c85050':'#4a4840';
+      const dot=p.isExample?'#4a8abf':(isCurrent?'#c85050':'#4a4840');
+      const sub=p.isExample?'Ejemplo fijo · 3 clips + merge final':new Date(p.created_at).toLocaleDateString();
       return`<div class="ps-pipe${isCurrent?' on':''}" onclick="switchPipeline('${p.id}','${p.name.replace(/'/g,"\\'")}')">
         <div class="ps-dot" style="background:${dot}"></div>
         <div class="ps-info">
           <div class="ps-name">${p.name}</div>
-          <div class="ps-sub">${new Date(p.created_at).toLocaleDateString()}</div>
+          <div class="ps-sub">${sub}</div>
         </div>
-        <button class="ps-del" onclick="event.stopPropagation();deletePipeline('${p.id}')" title="Eliminar">✕</button>
+        ${p.isExample?'':`<button class="ps-del" onclick="event.stopPropagation();deletePipeline('${p.id}')" title="Eliminar">✕</button>`}
       </div>`;
     }).join('');
   }catch(e){list.innerHTML='<div class="ps-empty">Error cargando pipelines</div>';}
@@ -3534,6 +3655,10 @@ async function switchPipeline(id,name){
 }
 
 async function deletePipeline(id){
+  if(id===PINNED_EXAMPLE_PIPELINE.id){
+    glog('warn','Pipeline','system','El pipeline de ejemplo de 3 videos está fijado y no se puede eliminar desde el menú.');
+    return;
+  }
   if(!confirm('¿Eliminar este pipeline?'))return;
   await fetch('/api/pipelines/'+id,{method:'DELETE'}).catch(()=>{});
   if(id===currentPipelineId){currentPipelineId=null;terminalPipelineId=null;document.getElementById('pipe-label').textContent='Sin pipeline';}
@@ -4741,34 +4866,38 @@ function buildRoleAwareLayout(agentes, centerX, centerY){
   const matchCount=standard.filter(id=>ids.has(id)).length;
   if(matchCount < 5)return null;
 
-  const leftX=centerX-720;
-  const midA=centerX-250;
-  const midB=centerX+170;
-  const midC=centerX+590;
-  const topY=centerY-280;
-  const stackGap=215;
-  const prodY=centerY+40;
+  // Horizontal left→right flow:
+  // Main row: Piloto → Orquestador → Escritor → ImgGen → Digestor
+  // Support row: Editor (below Piloto), Investigador (below Orquestador)
+  const pilotX  = centerX - 580;
+  const orqX    = centerX - 180;
+  const writerX = centerX + 210;
+  const imgX    = centerX + 620;
+  const asmX    = centerX + 1030;
+
+  const mainY    = centerY - 160;
+  const supportY = centerY + 250;
 
   const pos={};
-  if(ids.has('AG-01'))pos['AG-01']={x:leftX,y:topY};
-  if(ids.has('AG-02'))pos['AG-02']={x:leftX,y:topY+stackGap};
-  if(ids.has('AG-05'))pos['AG-05']={x:leftX,y:topY+(stackGap*2)};
-  if(ids.has('AG-06'))pos['AG-06']={x:leftX,y:topY+(stackGap*3)};
-  if(ids.has('AG-03'))pos['AG-03']={x:midA,y:prodY};
-  if(ids.has('AG-04'))pos['AG-04']={x:midB,y:prodY};
-  if(ids.has('AG-07'))pos['AG-07']={x:midC,y:prodY};
+  if(ids.has('AG-01'))pos['AG-01']={x:pilotX,  y:mainY};
+  if(ids.has('AG-02'))pos['AG-02']={x:orqX,    y:mainY};
+  if(ids.has('AG-05'))pos['AG-05']={x:pilotX,  y:supportY};
+  if(ids.has('AG-06'))pos['AG-06']={x:orqX,    y:supportY};
+  if(ids.has('AG-03'))pos['AG-03']={x:writerX, y:mainY};
+  if(ids.has('AG-04'))pos['AG-04']={x:imgX,    y:mainY};
+  if(ids.has('AG-07'))pos['AG-07']={x:asmX,    y:mainY};
 
   const unplaced=agentes.filter(a=>!pos[a.id]);
   unplaced.forEach((ag,index)=>{
     const row=Math.floor(index/2);
     const col=index%2;
-    pos[ag.id]={x:midA+(col*420),y:prodY+260+(row*260)};
+    pos[ag.id]={x:writerX+(col*410),y:supportY+(row*260)};
   });
 
   return {
     positions:pos,
-    seed:{x:centerX-120,y:topY-40},
-    context:{x:midC+300,y:topY-20},
+    seed:{x:pilotX-340,y:mainY+80},
+    context:{x:asmX+320,y:mainY},
   };
 }
 
@@ -4864,15 +4993,18 @@ function connectSSE(pipelineId){
     else if(d.status==='model_used'){
       if(d.model)n.model=d.model;
       const sel=document.getElementById('msel_'+n.id);
-      if(sel&&d.provider&&d.model&&sel.querySelector(`option[value="${d.provider}||${d.model}"]`))sel.value=`${d.provider}||${d.model}`;
+      if(sel&&d.provider&&d.model)ensureRuntimeModelOption(sel,d.provider,d.model,'real');
       glog('system',AGENT_NAMES[d.agent_id]||d.agent_id,'agent','Modelo real: '+[d.provider,d.model].filter(Boolean).join('/'));
     }
     else if(d.status==='media_model_used'){
+      const sel=document.getElementById('msel_'+n.id);
+      if(sel&&d.media_provider&&d.media_model)ensureRuntimeModelOption(sel,d.media_provider,d.media_model,'media');
       glog('system',AGENT_NAMES[d.agent_id]||d.agent_id,'agent','Motor media: '+[d.media_provider,d.media_model].filter(Boolean).join('/'));
     }
   });
   es.addEventListener('asset_ready',e=>{
     const d=JSON.parse(e.data);
+    dropBackendAssetCard(d);
     glog('done',AGENT_NAMES[d.agent_id]||d.agent_id,'agent','Asset listo: '+(d.bloque||d.asset_id||'resultado'));
   });
   es.addEventListener('output_ready',e=>{
@@ -5264,6 +5396,29 @@ function getAgentLabel(agentId){
   return AGENT_NAMES?.[agentId]||({'AG-TERM':'Terminal','AG-00':'Arquitecto'}[agentId])||agentId;
 }
 
+function detectActivePreset(){
+  const agents=modelsData.agents||{};
+  for(const[presetName,preset]of Object.entries(MODEL_PRESETS)){
+    const match=Object.entries(preset).every(([agId,cfg])=>{
+      const ag=agents[agId];
+      return ag&&ag.provider===cfg.provider&&ag.model===cfg.model;
+    });
+    if(match)return presetName;
+  }
+  return null;
+}
+
+function updatePresetBtnHighlight(presetName){
+  document.querySelectorAll('.toolbar-preset-btn').forEach(btn=>{
+    btn.classList.remove('active');
+  });
+  if(!presetName)return;
+  const map={free:0,pro:1};
+  const btns=document.querySelectorAll('.toolbar-preset-btn');
+  if(presetName==='free'&&btns[0])btns[0].classList.add('active');
+  else if(presetName==='pro'&&btns[1])btns[1].classList.add('active');
+}
+
 async function applyModelPreset(presetName){
   const preset=MODEL_PRESETS[presetName];
   if(!preset)return;
@@ -5283,6 +5438,7 @@ async function applyModelPreset(presetName){
     }
     renderMTModels();
     renderToolbarModelStrip();
+    updatePresetBtnHighlight(presetName);
   }catch(e){glog('warn','Models','system','Error aplicando preset: '+e.message);}
 }
 
@@ -5305,6 +5461,7 @@ function renderToolbarModelStrip(){
       </select>
     </label>`;
   }).join('');
+  updatePresetBtnHighlight(detectActivePreset());
 }
 
 function renderMTModels(){
