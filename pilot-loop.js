@@ -1419,11 +1419,16 @@ async function executeDecision(pipelineId, decision, ctx) {
 
 function applyAgentResultToContext(pipelineId, decision, rawResult) {
   const parsed = parseAgentResult(rawResult);
-  const resultPayload = parsed?.resultado ?? parsed ?? rawResult;
-  const serializedResult = parsed ? serializeStructuredResult(parsed.resultado) : serializeStructuredResult(rawResult);
   // decision.bloque_destino (set by direct dispatch) takes priority over LLM-inferred bloque_destino
   const explicitTarget = decision.bloque_destino || decision.parametros?.bloque_destino || parsed?.bloque_destino || null;
   const target = resolveTargetBlock(explicitTarget);
+  if (parsed && (decision.agente_id === 'AG-07' || target === 'revision_final')) {
+    const ctxBeforeDigest = contextManager.getContext(pipelineId);
+    const runtimeOutputsBeforeDigest = contextManager.getVigenteOutputs(pipelineId);
+    parsed.resultado = normalizeDigestorResultForCompletion(parsed.resultado, ctxBeforeDigest, runtimeOutputsBeforeDigest);
+  }
+  const resultPayload = parsed?.resultado ?? parsed ?? rawResult;
+  const serializedResult = parsed ? serializeStructuredResult(parsed.resultado) : serializeStructuredResult(rawResult);
   let outputRecord = null;
 
   const fallbackQuestionItems = buildQuestionItemsFromDecision(decision, target);
@@ -2449,6 +2454,72 @@ function buildResultSummary(resultado) {
   if (typeof resultado.sinopsis === 'string') return resultado.sinopsis.slice(0, 280);
   if (typeof resultado.contenido === 'string') return resultado.contenido.slice(0, 280);
   return JSON.stringify(resultado, null, 2).slice(0, 280);
+}
+
+function shouldDowngradeDigestorBlock(parsedResult, ctx, runtimeOutputs = []) {
+  if (!parsedResult || typeof parsedResult !== 'object') return false;
+  if (parsedResult.estado_general !== 'bloqueado') return false;
+
+  const unresolvedErrors = Array.isArray(parsedResult.errores_sin_resolver)
+    ? parsedResult.errores_sin_resolver.filter(Boolean)
+    : [];
+  if (unresolvedErrors.length) return false;
+
+  const warnings = Array.isArray(parsedResult.advertencias) ? parsedResult.advertencias.filter(Boolean) : [];
+  if (!warnings.length) return false;
+
+  const onlyPreferenceWarnings = warnings.every(item => {
+    const tipo = String(item?.tipo || '').toLowerCase();
+    const bloque = String(item?.bloque_afectado || '').toLowerCase();
+    const descripcion = String(item?.descripcion || '').toLowerCase();
+    return (
+      tipo === 'campo_incompleto' &&
+      (
+        bloque === 'preferencias_usuario' ||
+        descripcion.includes('preferencias_usuario') ||
+        descripcion.includes('campos requeridos')
+      )
+    );
+  });
+  if (!onlyPreferenceWarnings) return false;
+
+  const contentfulOutputs = runtimeOutputs.filter(output => {
+    const content = String(output?.contenido || '').trim();
+    return output?.estado === 'done' && content && content !== '{}' && content !== 'null' && content !== '""';
+  });
+  if (!contentfulOutputs.length) return false;
+
+  const requiredBlocks = Array.isArray(ctx?.template?.seed_template?.bloques_requeridos)
+    ? ctx.template.seed_template.bloques_requeridos.filter(name => name !== 'revision_final')
+    : [];
+  const allProductionBlocksReady = requiredBlocks.length > 0 && requiredBlocks.every(name => {
+    const est = ctx?.bloques?.[name]?.estado;
+    return est === 'completada' || est === 'omitido_por_bucle';
+  });
+  if (!allProductionBlocksReady) return false;
+
+  return true;
+}
+
+function normalizeDigestorResultForCompletion(parsedResult, ctx, runtimeOutputs = []) {
+  if (!shouldDowngradeDigestorBlock(parsedResult, ctx, runtimeOutputs)) return parsedResult;
+
+  const unresolvedPrefs = Object.entries(ctx?.preferencias_usuario?._requeridas || {})
+    .filter(([key, pref]) => pref?.obligatorio && !hasResolvedPreference(ctx, key, pref))
+    .map(([key]) => key);
+  const currentSummary = String(parsedResult.resumen_ejecutivo || '').trim();
+  const extraSummary = unresolvedPrefs.length
+    ? `Advertencias no bloqueantes: faltó confirmar formalmente ${unresolvedPrefs.join(', ')}.`
+    : 'Advertencias no bloqueantes en preferencias del usuario.';
+
+  return {
+    ...parsedResult,
+    estado_general: 'con_advertencias',
+    pipeline_estado: 'completo',
+    resumen_ejecutivo: currentSummary
+      ? `${currentSummary} ${extraSummary}`.trim()
+      : extraSummary,
+  };
 }
 
 function wrapCapturedPreferences(preferences) {
