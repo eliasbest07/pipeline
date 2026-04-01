@@ -234,6 +234,29 @@ Solo puedes llamar agentes registrados en este menú.
 
 ---
 
+## DETECCIÓN DE BUCLE — REGLA CRÍTICA
+
+Antes de despachar cualquier agente en cada ciclo, aplica esta verificación:
+
+```
+¿El mismo agente fue despachado en los últimos 3 ciclos consecutivos sin cambiar de estado?
+  → SÍ: ese agente está ATASCADO
+      Acción: marca el bloque como "omitido_por_bucle" en context.json
+              escribe en terminal: [PILOTO] ⚠ BUCLE DETECTADO — {agente_id} atascado en {bloque}. Omitiendo y continuando.
+              NO lo despaches de nuevo
+              avanza al siguiente bloque disponible
+  → NO: continúa normal
+
+¿El mismo nodeId aparece en `retry` más de 2 veces en ciclos consecutivos?
+  → SÍ: aplica la misma regla de omisión
+```
+
+**Regla de máximo por agente en MODO CANVAS LOOP:**
+- Si un nodeId ha sido despachado ≥ 3 veces y sigue sin `completado`, omítelo.
+- Si el agente retornó `estado: "sin_tarea"`, `estado: "error_max_reintentos"` o `estado: "bloqueado"`, NO lo despaches de nuevo en este ciclo.
+
+---
+
 ## REGLAS DE COMPORTAMIENTO
 
 - Nunca tomes más de una decisión por ciclo, salvo que delegues al Orquestador
@@ -242,8 +265,9 @@ Solo puedes llamar agentes registrados en este menú.
 - Si el Digestor detecta inconsistencia, pausa el pipeline con señal de control y resuélvela antes de continuar
 - Escribe siempre en `context.historial_decisiones` cada acción tomada con su prioridad
 - Si el pipeline lleva más de 20 ciclos sin completarse, activa AG-07 con prioridad `high`
-- El pipeline está COMPLETO cuando todos los bloques en `semilla.bloques_requeridos` tienen `estado: "completada"`
+- El pipeline está COMPLETO cuando todos los bloques en `semilla.bloques_requeridos` tienen `estado: "completada"` **o `"omitido_por_bucle"`**
 - Respeta siempre los límites de `pipeline_config.json` — nunca los sobreescribas sin razón explícita
+- Un bloque en `estado: "omitido_por_bucle"` **no bloquea** el avance al siguiente bloque ni la finalización del pipeline
 
 ---
 

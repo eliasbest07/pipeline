@@ -13,13 +13,70 @@ const skills = require('./skills');
 
 // ── Provider fallback chain ────────────────────────────────────
 const FALLBACK_MODELS = {
-  openrouter: 'openrouter/free',
+  openrouter: 'openrouter/free', // dynamic routing across available free models
   openai:    'gpt-4o-mini',
   anthropic: 'claude-haiku-4-5-20251001', // only used if explicitly configured
   google:    'gemini-2.0-flash',
 };
 
 const FAST_RUNTIME_MODELS = {}; // No hardcoded fast models — use models.js defaults
+const AGENT_MAX_TOKENS = {
+  'AG-TERM': 900,
+  'AG-00': 2200,
+  'AG-01': 1800,
+  'AG-02': 2200,
+  'AG-03': 1800,
+  'AG-04': 900,
+  'AG-05': 1200,
+  'AG-06': 1800,
+  'AG-07': 3200,
+};
+
+function truncateText(value, maxLen = 600) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  if (!text) return '';
+  return text.length > maxLen ? `${text.slice(0, maxLen)}...[truncated]` : text;
+}
+
+function compactValueForLLM(value, depth = 0) {
+  if (value == null) return value;
+  if (typeof value === 'string') return truncateText(value, depth === 0 ? 1200 : 500);
+  if (typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.slice(0, 6).map(item => compactValueForLLM(item, depth + 1));
+
+  const entries = Object.entries(value).slice(0, depth === 0 ? 12 : 8);
+  const compacted = {};
+  for (const [key, entryValue] of entries) {
+    compacted[key] = compactValueForLLM(entryValue, depth + 1);
+  }
+  return compacted;
+}
+
+function compactContextForLLM(context = {}) {
+  return compactValueForLLM(context, 0);
+}
+
+function getAgentMaxTokens(agentId) {
+  return AGENT_MAX_TOKENS[agentId] || 1600;
+}
+
+function compactSkillResults(skillResults = []) {
+  return (Array.isArray(skillResults) ? skillResults : []).slice(0, 3).map(result => {
+    if (!result || typeof result !== 'object') return result;
+    return {
+      skill: result.skill || result.nombre || null,
+      accion: result.accion || result.action || null,
+      ok: result.ok !== false,
+      resultado: compactValueForLLM(result.resultado || result.output || result, 1),
+      error: result.error ? truncateText(result.error, 240) : null,
+    };
+  });
+}
+
+function shouldRunSkillPostProcess(agentId, skillResults = []) {
+  if (!skillResults?.length) return false;
+  return agentId === 'AG-02' || agentId === 'AG-07';
+}
 
 function isQuotaError(err) {
   const m = err?.message || '';
@@ -28,7 +85,7 @@ function isQuotaError(err) {
 }
 
 function getAvailableProviders(preferred) {
-  // Priority order: openrouter (free) first, then google, then openai, then anthropic
+  // Priority order: openrouter first (has credits), then google, then openai, then anthropic
   const all = ['openrouter','google','openai','anthropic'];
   const avail = all.filter(p => {
     if (p === 'openrouter') return isOpenRouterReady();
@@ -103,9 +160,10 @@ function loadSystemPrompt(agentId) {
 // ── Runner principal ───────────────────────────────────────────
 async function runAgent(agentId, userInput, context = {}, opts = {}) {
   const systemPrompt = loadSystemPrompt(agentId);
+  const maxTokens = opts.maxTokens || getAgentMaxTokens(agentId);
 
   const contextBlock = Object.keys(context).length > 0
-    ? `\n\n--- CONTEXTO ACTUAL DEL PIPELINE ---\n${JSON.stringify(context, null, 2)}\n--- FIN CONTEXTO ---\n\n`
+    ? `\n\n--- CONTEXTO ACTUAL DEL PIPELINE ---\n${JSON.stringify(compactContextForLLM(context), null, 2)}\n--- FIN CONTEXTO ---\n\n`
     : '';
 
   const messages = [{ role: 'user', content: `${contextBlock}${userInput}` }];
@@ -138,7 +196,7 @@ async function runAgent(agentId, userInput, context = {}, opts = {}) {
         stream: true,
         pipelineId: opts.pipelineId,
         onModelResolved: opts.onModelResolved,
-        maxTokens: agentId === 'AG-07' ? 16384 : undefined,
+        maxTokens,
       });
       for await (const chunk of stream) {
         // OpenAI / OpenRouter format
@@ -155,23 +213,23 @@ async function runAgent(agentId, userInput, context = {}, opts = {}) {
         const response = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages, {
           pipelineId: opts.pipelineId,
           onModelResolved: opts.onModelResolved,
-          maxTokens: agentId === 'AG-07' ? 16384 : undefined,
+          maxTokens,
         });
         const skillResults = await skills.executeSkillsInResponse(response, opts.pipelineId);
-        if (skillResults?.length) {
-          const skillContext = `\n\n--- RESULTADOS DE SKILLS ---\n${JSON.stringify(skillResults, null, 2)}\n--- FIN RESULTADOS ---`;
+        if (shouldRunSkillPostProcess(agentId, skillResults)) {
+          const skillContext = `\n\n--- RESULTADOS DE SKILLS ---\n${JSON.stringify(compactSkillResults(skillResults), null, 2)}\n--- FIN RESULTADOS ---`;
           const messages2 = [...messages, { role: 'assistant', content: response }, { role: 'user', content: skillContext }];
-          const postSkillResponse = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages2, { pipelineId: opts.pipelineId });
+          const postSkillResponse = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages2, { pipelineId: opts.pipelineId, maxTokens });
           return SPECIALIST_AGENTS.has(agentId) ? normalizeSpecialistResponse(agentId, postSkillResponse, userInput) : postSkillResponse;
         }
         return SPECIALIST_AGENTS.has(agentId) ? normalizeSpecialistResponse(agentId, response, userInput) : response;
       }
     }
     const skillResults = await skills.executeSkillsInResponse(fullText, opts.pipelineId);
-    if (skillResults?.length) {
-      const skillContext = `\n\n--- RESULTADOS DE SKILLS ---\n${JSON.stringify(skillResults, null, 2)}\n--- FIN RESULTADOS ---`;
+    if (shouldRunSkillPostProcess(agentId, skillResults)) {
+      const skillContext = `\n\n--- RESULTADOS DE SKILLS ---\n${JSON.stringify(compactSkillResults(skillResults), null, 2)}\n--- FIN RESULTADOS ---`;
       const messages2 = [...messages, { role: 'assistant', content: fullText }, { role: 'user', content: skillContext }];
-      const postSkillResponse = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages2, { pipelineId: opts.pipelineId });
+      const postSkillResponse = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages2, { pipelineId: opts.pipelineId, maxTokens });
       return SPECIALIST_AGENTS.has(agentId) ? normalizeSpecialistResponse(agentId, postSkillResponse, userInput) : postSkillResponse;
     }
     return SPECIALIST_AGENTS.has(agentId) ? normalizeSpecialistResponse(agentId, fullText, userInput) : fullText;
@@ -182,18 +240,19 @@ async function runAgent(agentId, userInput, context = {}, opts = {}) {
     stream: opts.stream,
     pipelineId: opts.pipelineId,
     onModelResolved: opts.onModelResolved,
-    maxTokens: agentId === 'AG-07' ? 16384 : undefined,
+    maxTokens,
   });
   if (opts.stream) return response;
 
   // Detectar y ejecutar skills en la respuesta
   const skillResults = await skills.executeSkillsInResponse(response, opts.pipelineId);
-  if (skillResults?.length) {
-    const skillContext = `\n\n--- RESULTADOS DE SKILLS ---\n${JSON.stringify(skillResults, null, 2)}\n--- FIN RESULTADOS ---`;
+  if (shouldRunSkillPostProcess(agentId, skillResults)) {
+    const skillContext = `\n\n--- RESULTADOS DE SKILLS ---\n${JSON.stringify(compactSkillResults(skillResults), null, 2)}\n--- FIN RESULTADOS ---`;
     const messages2 = [...messages, { role: 'assistant', content: response }, { role: 'user', content: skillContext }];
     const postSkillResponse = await callLLMWithFallback(agentId, provider, model, systemPrompt, messages2, {
       pipelineId: opts.pipelineId,
       onModelResolved: opts.onModelResolved,
+      maxTokens,
     });
     return SPECIALIST_AGENTS.has(agentId)
       ? normalizeSpecialistResponse(agentId, postSkillResponse, userInput)

@@ -363,6 +363,9 @@ app.post('/api/pipelines/:id/operator-questions/:questionId/answer', (req, res, 
     const questions = ctxMgr.getOperatorQuestions(pipelineId);
     const existing = questions.find(item => item.public_id === questionId);
     if (!existing) return res.status(404).json({ error: 'question not found' });
+    if (existing.status === 'answered') {
+      return res.json({ ok: true, question: existing, context: ctxMgr.getContext(pipelineId), deduped: true });
+    }
 
     const updated = ctxMgr.upsertOperatorQuestion(pipelineId, {
       ...existing,
@@ -874,10 +877,25 @@ function trySaveSeedFromResponseServer(pipelineId, response) {
       try { return JSON.parse(m[1]); } catch { return null; }
     }).filter(Boolean);
 
-    const seedTemplate = jsonBlocks.find(b => b.template_id || b.bloques_requeridos);
-    const agentMenu = jsonBlocks.find(b => b.agentes && Array.isArray(b.agentes));
-    if (seedTemplate && agentMenu) {
-      ctxMgr.saveSeed(pipelineId, seedTemplate, agentMenu);
+    // Formato A: dos bloques separados (Claude/OpenRouter)
+    let seedTemplate = jsonBlocks.find(b => b.template_id || b.bloques_requeridos);
+    let agentMenu = jsonBlocks.find(b => b.agentes && Array.isArray(b.agentes));
+
+    // Formato B: un solo bloque wrapper con seed_template y agent_menu anidados (GPT-4o)
+    if (!seedTemplate || !agentMenu) {
+      const wrapper = jsonBlocks.find(b => b.seed_template || b.agent_menu);
+      if (wrapper) {
+        if (!seedTemplate && wrapper.seed_template) seedTemplate = wrapper.seed_template;
+        if (!agentMenu && wrapper.agent_menu) agentMenu = wrapper.agent_menu;
+        // agent_menu puede tener agentes en wrapper.agent_menu.agentes
+        if (!agentMenu && wrapper.agent_menu?.agentes) agentMenu = wrapper.agent_menu;
+      }
+    }
+
+    if (seedTemplate) {
+      // agentMenu is optional — if truncated/missing, use a default
+      const finalAgentMenu = agentMenu || { agentes: [], nota_arquitecto: 'Inferido del seed template' };
+      ctxMgr.saveSeed(pipelineId, seedTemplate, finalAgentMenu);
       return true;
     }
   } catch (err) {

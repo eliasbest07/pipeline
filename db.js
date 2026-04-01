@@ -198,7 +198,7 @@ const deletePipeline = db.prepare('DELETE FROM pipelines WHERE id = ?');
 
 // ── Nodes ──────────────────────────────────────────
 const getNodes      = db.prepare('SELECT * FROM nodes WHERE pipeline_id = ?');
-const insertNode    = db.prepare('INSERT INTO nodes (id, pipeline_id, type, x, y, config) VALUES (?, ?, ?, ?, ?, ?)');
+const insertNode    = db.prepare('INSERT OR REPLACE INTO nodes (id, pipeline_id, type, x, y, config) VALUES (?, ?, ?, ?, ?, ?)');
 const updateNode    = db.prepare('UPDATE nodes SET x = ?, y = ?, config = ? WHERE id = ?');
 const deleteNode    = db.prepare('DELETE FROM nodes WHERE id = ?');
 

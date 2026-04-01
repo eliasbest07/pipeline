@@ -686,6 +686,9 @@ function answerOperatorQuestion(pipelineId, existing, answer, answerOrigin = 'ma
   if (questionType === 'numero' && !/^\d+$/.test(String(answer).trim())) {
     return { error: 'numeric_answer_required', question: existing };
   }
+  if (existing.status === 'answered') {
+    return { question: existing, context: contextManager.getContext(pipelineId), deduped: true };
+  }
 
   const updated = contextManager.upsertOperatorQuestion(pipelineId, {
     ...existing,

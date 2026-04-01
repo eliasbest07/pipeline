@@ -20,6 +20,8 @@ const MAX_CYCLES = 50;
 const CYCLE_DELAY_MS = 500;
 const MAX_PARALLEL_DECISIONS = 3;
 const QUESTION_TIMEOUT_MS = 15000; // 15 seconds — auto-use suggestion if user doesn't answer
+const MAX_CONTEXT_BLOCKS_PER_AGENT = 4;
+const MAX_CONTEXT_STRING = 320;
 
 async function startLoop(pipelineId) {
   if (activeLoops.get(pipelineId)?.running) {
@@ -256,7 +258,7 @@ async function runLoop(pipelineId) {
         accion: 'preguntar_usuario',
       }, [{
         field_key: 'formato_salida',
-        question: '¿Cómo quieres la salida final de esta historia con imágenes: PDF ilustrado o video narrado?',
+        question: '¿En qué formato quieres el entregable final? PDF descargable o Video',
         suggestion: 'pdf',
         bloque: 'preferencias_usuario',
         tipo: 'opcion',
@@ -348,36 +350,67 @@ async function runLoop(pipelineId) {
     try {
       // ── CAMINO DIRECTO: sigue orden_produccion determinísticamente ──
       // Primario. El LLM solo se usa para casos sin siguiente bloque obvio.
-      const nextBlock = getNextPendingBlock(ctx, pipelineId);
-      if (nextBlock) {
-        const directDispatch = getBlockAutoDispatch(nextBlock, ctx);
-        emit(pipelineId, 'message', 'PILOTO', `[PILOTO] → ${directDispatch.agente_id} (${directDispatch.accion_label || directDispatch.accion}) bloque="${nextBlock}"`);
+      let nextBlocks = getNextPendingBlocks(ctx, pipelineId);
+      if (nextBlocks.length === 1 && nextBlocks[0] === 'clips_video' && ctx?.bloques?.guion_escenas?.estado === 'completada') {
+        let guionResult = {};
+        try {
+          guionResult = JSON.parse(ctx?.bloques?.guion_escenas?.resultado || '{}');
+        } catch { /* ignore */ }
+        const maybeExpanded = expandVideoStoryboardBlocks(pipelineId, guionResult?.resultado || guionResult);
+        if (maybeExpanded) {
+          const refreshedCtx = contextManager.getContext(pipelineId);
+          nextBlocks = getNextPendingBlocks(refreshedCtx, pipelineId);
+        }
+      }
+      if (nextBlocks.length) {
+        const dispatchCtx = contextManager.getContext(pipelineId) || ctx;
+        const directDispatches = nextBlocks.map(blockName => ({
+          blockName,
+          dispatch: getBlockAutoDispatch(blockName, dispatchCtx),
+        }));
+        const dispatchLabel = directDispatches.map(({ blockName, dispatch }) =>
+          `${dispatch.agente_id} (${dispatch.accion_label || dispatch.accion}) bloque="${blockName}"`
+        ).join(' | ');
+        emit(pipelineId, 'message', 'PILOTO', `[PILOTO] → ${dispatchLabel}`);
         emitPipelineEvent('agent_updated', pipelineId, {
           agent_id: 'AG-01',
           status: 'direct_dispatch',
-          next_block: nextBlock,
-          next_agent: directDispatch.agente_id,
+          next_block: nextBlocks[0],
+          next_blocks: nextBlocks,
+          next_agent: directDispatches[0].dispatch.agente_id,
         });
-        contextManager.logDecision(pipelineId, {
-          ciclo: ciclo + 1,
-          agente: directDispatch.agente_id,
-          accion: directDispatch.accion,
-          prioridad: 'high',
-          razon: `Siguiente bloque pendiente en orden_produccion: ${nextBlock}`,
+        directDispatches.forEach(({ blockName, dispatch }) => {
+          contextManager.logDecision(pipelineId, {
+            ciclo: ciclo + 1,
+            agente: dispatch.agente_id,
+            accion: dispatch.accion,
+            prioridad: 'high',
+            razon: `Siguiente bloque pendiente en orden_produccion: ${blockName}`,
+          });
+          contextManager.recordEvent(pipelineId, {
+            tipo: 'pilot_direct_dispatch',
+            fuente: 'AG-01',
+            mensaje: `[PILOTO] Direct → ${dispatch.agente_id} / ${blockName}`,
+            payload: dispatch,
+          });
         });
-        contextManager.recordEvent(pipelineId, {
-          tipo: 'pilot_direct_dispatch',
-          fuente: 'AG-01',
-          mensaje: `[PILOTO] Direct → ${directDispatch.agente_id} / ${nextBlock}`,
-          payload: directDispatch,
+        const directResults = await Promise.allSettled(
+          directDispatches.map(({ dispatch }) => executeDecision(pipelineId, dispatch, dispatchCtx))
+        );
+        directResults.forEach((result, index) => {
+          const { blockName, dispatch } = directDispatches[index];
+          if (result.status === 'fulfilled') {
+            applyAgentResultToContext(pipelineId, dispatch, result.value);
+            return;
+          }
+          emit(pipelineId, 'message', 'PILOTO', `[PILOTO] Error en bloque "${blockName}": ${result.reason?.message || result.reason}`);
+          contextManager.updateBloque(pipelineId, blockName, {
+            estado: 'error',
+            resultado: JSON.stringify({ error: result.reason?.message || String(result.reason) }),
+            agente: dispatch.agente_id,
+          });
         });
-        try {
-          const directResult = await executeDecision(pipelineId, directDispatch, ctx);
-          applyAgentResultToContext(pipelineId, directDispatch, directResult);
-          emitContextSnapshot(pipelineId);
-        } catch (blockErr) {
-          emit(pipelineId, 'message', 'PILOTO', `[PILOTO] Error en bloque "${nextBlock}": ${blockErr.message}`);
-        }
+        emitContextSnapshot(pipelineId);
         const budgetSnapDirect = getBudgetStatus(pipelineId);
         if (budgetSnapDirect) emitPipelineEvent('budget_update', pipelineId, budgetSnapDirect);
         contextManager.incrementCycle(pipelineId);
@@ -442,9 +475,12 @@ async function runLoop(pipelineId) {
       }
 
       if (decisions.some(decision => decision.pipeline_completo === true)) {
-        // Guard: only accept pipeline_completo if all required blocks are actually done
+        // Guard: only accept pipeline_completo if all required blocks are actually done (or skipped)
         const reqBlocks = ctx?.template?.seed_template?.bloques_requeridos || [];
-        const allDone = reqBlocks.length > 0 && reqBlocks.every(name => ctx?.bloques?.[name]?.estado === 'completada');
+        const allDone = reqBlocks.length > 0 && reqBlocks.every(name => {
+          const est = ctx?.bloques?.[name]?.estado;
+          return est === 'completada' || est === 'omitido_por_bucle';
+        });
         if (allDone) {
           contextManager.setEstado(pipelineId, 'completo');
           contextManager.upsertAgentState(pipelineId, 'AG-01', {
@@ -604,7 +640,10 @@ function hasResolvedPreference(ctx, fieldKey, pref = null) {
   if (topLevel?.resuelta === true) return true;
   if (pref?.resuelta === true) return true;
   const prefValue = pref?.valor;
-  return prefValue !== undefined && prefValue !== null && String(prefValue).trim() !== '';
+  if (prefValue !== undefined && prefValue !== null && String(prefValue).trim() !== '') return true;
+  // Si nunca fue respondida pero tiene sugerencia, se toma el default — no bloquea el pipeline
+  const sugerencia = pref?.sugerencia ?? topLevel?.sugerencia;
+  return sugerencia !== undefined && sugerencia !== null && String(sugerencia).trim() !== '';
 }
 
 function getRevisionDependencies(ctx) {
@@ -618,11 +657,25 @@ function areBlocksCompleted(ctx, blockNames = []) {
 }
 
 function shouldAskForFinalOutputFormat(ctx) {
+  // Detecta si el tipo de entrega es obvio por el prompt o la semilla
   const promptBase = String(ctx?.preferencias_usuario?.prompt_base?.valor || ctx?.preferencias_usuario?.objetivo?.valor || '').toLowerCase();
-  const looksNarrative = /historia|cuento|relato/.test(promptBase);
-  if (!looksNarrative) return false;
+  const seedDesc = String(ctx?.template?.seed_template?.descripcion || ctx?.template?.seed_template?.resultado_final || '').toLowerCase();
+  const combined = promptBase + ' ' + seedDesc;
+
+  // Si el formato ya está explícito en el prompt, no preguntar
+  const isObviouslyVideo = /video|clip|reels?|tiktok|youtube|short/.test(combined);
+  const isObviouslyPDF  = /pdf|libro|ebook|guia|manual|documento|curso/.test(combined);
+  if (isObviouslyVideo || isObviouslyPDF) return false;
+
+  // Solo preguntar si hay bloques de contenido completados (pipeline produce texto)
   const requiredBlocks = Array.isArray(ctx?.template?.seed_template?.bloques_requeridos) ? ctx.template.seed_template.bloques_requeridos : [];
-  if (!requiredBlocks.length || !areBlocksCompleted(ctx, requiredBlocks)) return false;
+  if (!requiredBlocks.length) return false;
+  const completedCount = requiredBlocks.filter(name => {
+    const est = ctx?.bloques?.[name]?.estado;
+    return est === 'completada' || est === 'omitido_por_bucle';
+  }).length;
+  if (completedCount < Math.ceil(requiredBlocks.length * 0.5)) return false; // menos del 50% completado
+
   if (ctx?.ensamblaje?.estado === 'completado' || ctx?.ensamblaje?.producto_final) return false;
   const formato = ctx?.preferencias_usuario?.formato_salida;
   if (formato?.resuelta === true && String(formato?.valor || '').trim()) return false;
@@ -631,6 +684,84 @@ function shouldAskForFinalOutputFormat(ctx) {
     : [];
   if (pendingQuestions.some(item => item?.field_key === 'formato_salida')) return false;
   return true;
+}
+
+function truncateForLLM(value, maxLen = MAX_CONTEXT_STRING) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  if (!text) return '';
+  return text.length > maxLen ? `${text.slice(0, maxLen)}...[truncated]` : text;
+}
+
+function compactForLLM(value, depth = 0) {
+  if (value == null) return value;
+  if (typeof value === 'string') return truncateForLLM(value, depth === 0 ? 500 : 220);
+  if (typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.slice(0, depth === 0 ? 6 : 3).map(item => compactForLLM(item, depth + 1));
+
+  const compacted = {};
+  for (const [key, entryValue] of Object.entries(value).slice(0, depth === 0 ? 10 : 6)) {
+    compacted[key] = compactForLLM(entryValue, depth + 1);
+  }
+  return compacted;
+}
+
+function summarizePreferencesForLLM(preferencias = {}) {
+  const summary = {};
+  for (const [key, pref] of Object.entries(preferencias || {})) {
+    if (key.startsWith('_')) continue;
+    if (pref && typeof pref === 'object' && 'valor' in pref) {
+      summary[key] = {
+        valor: compactForLLM(pref.valor, 1),
+        resuelta: pref.resuelta === true,
+      };
+      continue;
+    }
+    summary[key] = compactForLLM(pref, 1);
+  }
+
+  const requeridas = Object.values(preferencias?._requeridas || {}).slice(0, 6).map(pref => ({
+    campo: pref?.campo || null,
+    resuelta: pref?.resuelta === true,
+    obligatorio: pref?.obligatorio !== false,
+    valor: compactForLLM(pref?.valor, 1),
+  }));
+
+  return {
+    ...summary,
+    _requeridas: requeridas,
+  };
+}
+
+function summarizeBloquesForLLM(bloques = {}, maxBlocks = MAX_CONTEXT_BLOCKS_PER_AGENT) {
+  return Object.fromEntries(
+    Object.entries(bloques)
+      .slice(0, maxBlocks)
+      .map(([key, bloque]) => [key, {
+        estado: bloque?.estado || null,
+        agente: bloque?.agente || bloque?.agente_responsable || null,
+        resultado: truncateForLLM(bloque?.resultado || '', 240),
+        nota: truncateForLLM(bloque?.nota || '', 120),
+      }])
+  );
+}
+
+function buildCompactPilotContext(ctx) {
+  return {
+    pipeline_id: ctx.pipeline_id,
+    pipeline_name: ctx.pipeline_name,
+    ciclo: ctx.ciclo,
+    estado: ctx.estado,
+    preferencias_usuario: summarizePreferencesForLLM(ctx.preferencias_usuario || {}),
+    bloques: summarizeBloquesForLLM(ctx.bloques || {}, 8),
+    agentes_activos: compactForLLM(ctx.agentes_activos || {}, 1),
+    ensamblaje: compactForLLM(ctx.ensamblaje || {}, 1),
+    preguntas_pendientes: compactForLLM(ctx.preguntas_pendientes || [], 1),
+    respuestas_usuario: compactForLLM(ctx.respuestas_usuario || {}, 1),
+    cola_tareas: compactForLLM(Array.isArray(ctx.cola_tareas) ? ctx.cola_tareas.slice(0, 6) : [], 1),
+    salud_pipeline: compactForLLM(ctx.salud_pipeline || {}, 1),
+    overrides_pendientes: compactForLLM(ctx.overrides_pendientes || [], 1),
+    ag05_dispatch_queue: compactForLLM(ctx.ag05_dispatch_queue || [], 1),
+  };
 }
 
 function shouldExecuteDecision(ctx, decision) {
@@ -647,10 +778,11 @@ function shouldExecuteDecision(ctx, decision) {
   const seedOrder = ctx?.template?.seed_template?.orden_produccion;
   if (Array.isArray(seedOrder)) {
     const paso = seedOrder.find(p => p.bloque === blockName);
-    if (paso && Array.isArray(paso.depende_de) && paso.depende_de.length) {
-      const blockedBy = paso.depende_de.filter(dep => {
+    const dependeDe = resolveDependencyBlockNames(seedOrder, paso?.depende_de);
+    if (paso && dependeDe.length) {
+      const blockedBy = dependeDe.filter(dep => {
         const depBlock = ctx?.bloques?.[dep];
-        return !depBlock || depBlock.estado !== 'completada';
+        return !depBlock || (depBlock.estado !== 'completada' && depBlock.estado !== 'omitido_por_bucle');
       });
       if (blockedBy.length) {
         return false; // dependency not met
@@ -734,7 +866,10 @@ function assessContextHealth(ctx) {
 
 function isPipelineCompleteFromContext(ctx) {
   const required = ctx?.template?.seed_template?.bloques_requeridos || [];
-  const allRequiredReady = required.length > 0 && required.every(name => ctx?.bloques?.[name]?.estado === 'completada');
+  const allRequiredReady = required.length > 0 && required.every(name => {
+    const est = ctx?.bloques?.[name]?.estado;
+    return est === 'completada' || est === 'omitido_por_bucle';
+  });
   const requiredPrefs = ctx?.preferencias_usuario?._requeridas || {};
   const unresolvedRequiredPrefs = Object.entries(requiredPrefs)
     .filter(([key, pref]) => pref?.obligatorio && !hasResolvedPreference(ctx, key, pref))
@@ -747,7 +882,9 @@ function isPipelineCompleteFromContext(ctx) {
     ? ctx.preguntas_pendientes.filter(item => item?.status !== 'answered')
     : [];
   const finalProduct = ctx?.ensamblaje?.producto_final;
-  const assemblyReady = Boolean(finalProduct) || ctx?.ensamblaje?.estado === 'completado';
+  const revisionDone = ctx?.bloques?.revision_final?.estado === 'completada' || ctx?.bloques?.revision_final?.estado === 'omitido_por_bucle';
+  // Assembly is ready if: explicit completado state, or producto_final exists, or revision_final ran (AG-07 completed)
+  const assemblyReady = Boolean(finalProduct) || ctx?.ensamblaje?.estado === 'completado' || revisionDone;
   return allRequiredReady
     && assemblyReady
     && unresolvedRequiredPrefs.length === 0
@@ -778,6 +915,12 @@ const SEED_BLOCK_AGENT_MAP = {
   'estructura_capitulos':     { agente_id: 'AG-03', accion: 'generar_estructura' },
   'estructura_modulos':       { agente_id: 'AG-03', accion: 'generar_estructura' },
   'contenido_modulos':        { agente_id: 'AG-03', accion: 'generar_contenido' },
+  'materiales_pdf':           { agente_id: 'AG-03', accion: 'generar_contenido' },
+  'pdf_ilustrado':            { agente_id: 'AG-03', accion: 'generar_contenido' },
+  'manual_pdf':               { agente_id: 'AG-03', accion: 'generar_contenido' },
+  'guia_pdf':                 { agente_id: 'AG-03', accion: 'generar_contenido' },
+  'ebook':                    { agente_id: 'AG-03', accion: 'generar_contenido' },
+  'documento_final':          { agente_id: 'AG-03', accion: 'generar_contenido' },
   'capitulos_contenido':      { agente_id: 'AG-03', accion: 'escribir_capitulo' },
   'escritura_contenido':      { agente_id: 'AG-03', accion: 'generar_contenido' },
   'subtitulos':               { agente_id: 'AG-03', accion: 'generar_subtitulos' },
@@ -827,6 +970,7 @@ const BLOCK_PATTERN_MAP = [
   { pattern: /investigacion|investigación|research|busqueda|tendencia|referencia|dato.*mercado/i, map: { agente_id: 'AG-06', accion: 'realizar_investigacion' } },
   { pattern: /preferencia/i,                                               map: { agente_id: 'AG-05', accion: 'recopilar_preferencias_usuario' } },
   // Texto
+  { pattern: /pdf|ebook|manual|guia|guía|documento|dossier|material(es)?/i, map: { agente_id: 'AG-03', accion: 'generar_contenido' } },
   { pattern: /guion|script|narraci|narrac|prompt.*imagen|imagen.*prompt|escritura|contenido|modulo|capitulo|leccion/i, map: { agente_id: 'AG-03', accion: 'generar_guion' } },
   // Media
   { pattern: /edicion.*video|produccion.*video|video|clip|cinemat/i,       map: { agente_id: 'AG-04', accion: 'generar_video' } },
@@ -834,6 +978,23 @@ const BLOCK_PATTERN_MAP = [
 ];
 
 const BLOCK_ERROR_COUNTS = {}; // { pipelineId: { blockName: count } }
+
+function resolveDependencyBlockNames(seedOrder = [], dependeDe = []) {
+  if (!Array.isArray(dependeDe) || dependeDe.length === 0) return [];
+  return dependeDe
+    .map(dep => {
+      if (typeof dep === 'number') {
+        return seedOrder.find(step => Number(step?.paso) === dep)?.bloque || null;
+      }
+      const depStr = String(dep || '').trim();
+      if (/^\d+$/.test(depStr)) {
+        return seedOrder.find(step => Number(step?.paso) === Number(depStr))?.bloque || null;
+      }
+      return depStr || null;
+    })
+    .filter(Boolean);
+}
+
 function getNextPendingBlock(ctx, pipelineId) {
   const orden = ctx?.template?.seed_template?.orden_produccion || [];
   const debugStates = Object.fromEntries(orden.map(p => [p.bloque, ctx?.bloques?.[p.bloque]?.estado || 'MISSING']));
@@ -843,23 +1004,68 @@ function getNextPendingBlock(ctx, pipelineId) {
     const bloque = ctx?.bloques?.[paso.bloque];
     const estado = bloque?.estado;
     if (estado === 'completada' || estado === 'esperando_usuario') continue;
+    if (estado === 'omitido_por_bucle') continue;
     if (estado === 'error') {
       const retryCount = pipelineCounts[paso.bloque] || 0;
       if (retryCount >= 2) {
-        console.log(`[PILOTO] Bloque "${paso.bloque}" alcanzó max reintentos (${retryCount}) — saltando`);
+        console.log(`[PILOTO] Bloque "${paso.bloque}" alcanzó max reintentos (${retryCount}) — marcando omitido_por_bucle`);
+        contextManager.updateBloque(pipelineId, paso.bloque, { estado: 'omitido_por_bucle' });
         continue;
       }
       pipelineCounts[paso.bloque] = retryCount + 1;
     } else {
       pipelineCounts[paso.bloque] = 0;
     }
-    const depsMet = (paso.depende_de || []).every(dep => {
+    const depsMet = resolveDependencyBlockNames(orden, paso.depende_de).every(dep => {
       const depEstado = ctx?.bloques?.[dep]?.estado;
       return depEstado === 'completada' || depEstado === 'error'; // treat error deps as unblocking
     });
     if (depsMet) return paso.bloque;
   }
   return null;
+}
+
+function getNextPendingBlocks(ctx, pipelineId, maxCount = MAX_PARALLEL_DECISIONS) {
+  const orden = ctx?.template?.seed_template?.orden_produccion || [];
+  const ready = [];
+  let parallelAgent = null;
+  let parallelAction = null;
+
+  for (const paso of orden) {
+    const bloque = ctx?.bloques?.[paso.bloque];
+    const estado = bloque?.estado;
+    if (estado === 'completada' || estado === 'esperando_usuario' || estado === 'omitido_por_bucle') continue;
+
+    const depsMet = resolveDependencyBlockNames(orden, paso.depende_de).every(dep => {
+      const depEstado = ctx?.bloques?.[dep]?.estado;
+      return depEstado === 'completada' || depEstado === 'error';
+    });
+
+    if (!depsMet) {
+      if (!ready.length) continue;
+      break;
+    }
+
+    const dispatch = getBlockAutoDispatch(paso.bloque, ctx);
+    const isParallelMedia = Boolean(paso.puede_paralelizarse)
+      && dispatch.agente_id === 'AG-04'
+      && (dispatch.accion === 'generar_imagen' || dispatch.accion === 'generar_video');
+
+    if (!ready.length) {
+      ready.push(paso.bloque);
+      if (!isParallelMedia) break;
+      parallelAgent = dispatch.agente_id;
+      parallelAction = dispatch.accion;
+      continue;
+    }
+
+    if (!isParallelMedia) break;
+    if (dispatch.agente_id !== parallelAgent || dispatch.accion !== parallelAction) break;
+    ready.push(paso.bloque);
+    if (ready.length >= maxCount) break;
+  }
+
+  return ready;
 }
 
 function getBlockAutoDispatch(blockName, ctx) {
@@ -871,11 +1077,14 @@ function getBlockAutoDispatch(blockName, ctx) {
     mapEntry = BLOCK_PATTERN_MAP.find(p => p.pattern.test(blockName))?.map || null;
     if (mapEntry) console.log(`[pilot] block "${blockName}" matched by pattern → ${mapEntry.agente_id}/${mapEntry.accion}`);
   }
-  const agente_id = block.agente_responsable || mapEntry?.agente_id || 'AG-03';
+  let agente_id = mapEntry?.agente_id || block.agente_responsable || 'AG-03';
   // Always use canonical accion from map — accion_inicial from AG-00 is free-form and may not match system prompt
   const accion    = mapEntry?.accion || block.accion_inicial || 'generar';
   // Use AG-00's accion_inicial as a human-readable label for log messages
   const accion_label = block.accion_inicial || accion;
+  if (agente_id === 'AG-02' && mapEntry?.agente_id && mapEntry.agente_id !== 'AG-02') {
+    agente_id = mapEntry.agente_id;
+  }
   return {
     agente_id,
     agente_nombre: agente_id,
@@ -959,23 +1168,7 @@ Responde SOLO con este JSON (sin markdown):
 }`;
 
   // Slim context — exclude heavy event logs that don't help the pilot decide
-  const pilotCtx = {
-    pipeline_id: ctx.pipeline_id,
-    pipeline_name: ctx.pipeline_name,
-    ciclo: ctx.ciclo,
-    estado: ctx.estado,
-    preferencias_usuario: ctx.preferencias_usuario || {},
-    bloques: ctx.bloques || {},
-    agentes_activos: ctx.agentes_activos || {},
-    assets: ctx.assets || {},
-    ensamblaje: ctx.ensamblaje || {},
-    preguntas_pendientes: ctx.preguntas_pendientes || [],
-    respuestas_usuario: ctx.respuestas_usuario || {},
-    cola_tareas: Array.isArray(ctx.cola_tareas) ? ctx.cola_tareas.slice(0, 10) : [],
-    salud_pipeline: ctx.salud_pipeline || {},
-    overrides_pendientes: ctx.overrides_pendientes || [],
-    ag05_dispatch_queue: ctx.ag05_dispatch_queue || [],
-  };
+  const pilotCtx = buildCompactPilotContext(ctx);
 
   try {
     let pilotModelInfo = null;
@@ -1271,7 +1464,9 @@ function applyAgentResultToContext(pipelineId, decision, rawResult) {
         return;
       }
     }
-    if (target) {
+    // Only update block when rawResult has actual content — avoid overwriting blocks
+    // that were already updated directly (e.g. executeVideoAssembly returns void)
+    if (target && rawResult != null) {
       contextManager.updateBloque(pipelineId, target, {
         estado: 'completada',
         resultado: typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult, null, 2),
@@ -1380,12 +1575,21 @@ function applyAgentResultToContext(pipelineId, decision, rawResult) {
     return;
   }
 
+  if (target === 'guion_escenas' && parsed.estado !== 'error') {
+    expandVideoStoryboardBlocks(pipelineId, parsed.resultado);
+  }
+
   let assetRecord = null;
   if (parsed.asset && target && !['revision_final', 'estado_pipeline'].includes(target)) {
     // For media assets (imagen/video), only use contenido if it looks like a real URL
     const rawContenido = parsed.asset.contenido;
     const isMediaAsset = ['imagen', 'video'].includes(parsed.asset.tipo_asset);
-    const hasRealUrl = rawContenido && typeof rawContenido === 'string' && (rawContenido.startsWith('http://') || rawContenido.startsWith('https://'));
+    const hasRealUrl = rawContenido && typeof rawContenido === 'string' && (
+      rawContenido.startsWith('http://')
+      || rawContenido.startsWith('https://')
+      || rawContenido.startsWith('/uploads/')
+      || rawContenido.startsWith('/pipeline-outputs/')
+    );
     const resolvedContenido = isMediaAsset
       ? (hasRealUrl ? rawContenido : null)      // never fall back to text for media
       : (rawContenido || serializedResult);
@@ -1408,7 +1612,8 @@ function applyAgentResultToContext(pipelineId, decision, rawResult) {
       asset_id: assetRecord?.asset_id || null,
       bloque: target,
       tipo_asset: assetRecord?.tipo_asset || parsed.asset.tipo_asset || null,
-        estado: assetRecord?.estado || parsed.estado || 'ok',
+      estado: assetRecord?.estado || parsed.estado || 'ok',
+      asset: assetRecord || null,
     });
   }
 
@@ -1454,8 +1659,11 @@ function applyAgentResultToContext(pipelineId, decision, rawResult) {
     const assemblyReady = Boolean(
       parsed.resultado?.pipeline_estado === 'completo' ||
       parsed.resultado?.estado_general === 'listo' ||
+      parsed.resultado?.estado_general === 'con_advertencias' ||
       parsed.resultado?.ensamblaje_listo === true ||
-      parsed.resultado?.producto_final
+      parsed.resultado?.producto_final ||
+      parsed.resultado?.pdf_url ||
+      parsed.resultado?.video_url
     );
     contextManager.updateAssembly(pipelineId, {
       estado: assemblyReady ? 'completado' : 'en_revision',
@@ -1486,6 +1694,240 @@ function applyAgentResultToContext(pipelineId, decision, rawResult) {
       context: nextCtx,
     });
   }
+}
+
+function inferStoryboardClipCount(ctx, guionResult = {}) {
+  const guion = guionResult?.guion;
+  if (Array.isArray(guion) && guion.length) return Math.min(Math.max(guion.length, 1), 6);
+
+  const promptBase = String(
+    ctx?.preferencias_usuario?.prompt_base?.valor
+    || ctx?.preferencias_usuario?.objetivo?.valor
+    || ''
+  ).toLowerCase();
+  const explicitClips = promptBase.match(/(\d+)\s*clips?/i);
+  if (explicitClips?.[1]) return Math.min(Math.max(Number(explicitClips[1]), 1), 6);
+
+  const explicitSeconds = promptBase.match(/(\d+)\s*seg/i);
+  if (explicitSeconds?.[1]) {
+    const estimated = Math.ceil(Number(explicitSeconds[1]) / 5);
+    return Math.min(Math.max(estimated, 1), 6);
+  }
+
+  return 3;
+}
+
+function buildStoryboardScenes(ctx, guionResult = {}) {
+  const desiredCount = inferStoryboardClipCount(ctx, guionResult);
+  const rawScenes = Array.isArray(guionResult?.guion) ? guionResult.guion : [];
+  const globalTheme = String(ctx?.preferencias_usuario?.tema_clips?.valor || ctx?.preferencias_usuario?.objetivo?.valor || '').trim();
+  const productionNotes = Array.isArray(guionResult?.notas_produccion) ? guionResult.notas_produccion : [];
+  const sharedVisualStyle = [
+    'Mantener el mismo personaje, paleta de color, tipo de iluminacion y lenguaje visual en todas las escenas.',
+    productionNotes.length ? `Notas de produccion: ${productionNotes.join(' | ')}` : null,
+    globalTheme ? `Tema central: ${globalTheme}` : null,
+  ].filter(Boolean).join(' ');
+
+  return Array.from({ length: desiredCount }, (_, index) => {
+    const scene = rawScenes[index] || {};
+    const title = String(scene?.titulo || `Escena ${index + 1}`).trim();
+    const content = String(scene?.contenido || scene?.descripcion || scene?.texto || `${globalTheme || 'Video corto'} escena ${index + 1}`).trim();
+    const transition = String(scene?.transicion || '').trim();
+    const duration = String(scene?.duracion || '5 segundos').trim();
+    return {
+      index: index + 1,
+      title,
+      content,
+      transition,
+      duration,
+      visualBible: sharedVisualStyle,
+    };
+  });
+}
+
+function buildStoryboardOrderFromScenes(scenes = []) {
+  const order = [
+    {
+      paso: 1,
+      bloque: 'preferencias_usuario',
+      agente: 'AG-05',
+      accion: 'recopilar_preferencias_usuario',
+      depende_de: [],
+      requiere_aprobacion_usuario: false,
+      puede_paralelizarse: false,
+      nota: 'Recopilar preferencias del video.',
+    },
+    {
+      paso: 2,
+      bloque: 'guion_escenas',
+      agente: 'AG-03',
+      accion: 'generar_guion',
+      depende_de: ['preferencias_usuario'],
+      requiere_aprobacion_usuario: false,
+      puede_paralelizarse: false,
+      nota: 'Crear el guion dividido por escenas.',
+    },
+  ];
+
+  const imageBlocks = scenes.map(scene => `imagen_escena_${scene.index}`);
+  const clipBlocks = scenes.map(scene => `clip_video_${scene.index}`);
+
+  scenes.forEach((scene) => {
+    const imageBlock = `imagen_escena_${scene.index}`;
+
+    order.push({
+      paso: order.length + 1,
+      bloque: imageBlock,
+      agente: 'AG-04',
+      accion: 'generar_imagen',
+      depende_de: ['guion_escenas'],
+      requiere_aprobacion_usuario: false,
+      puede_paralelizarse: true,
+      nota: `Escena ${scene.index}: ${scene.title}. ${scene.content}. ${scene.visualBible}`,
+      metadata: {
+        scene_index: scene.index,
+        scene_title: scene.title,
+        scene_content: scene.content,
+        clip_duration_seconds: 5,
+        visual_bible: scene.visualBible,
+      },
+    });
+  });
+
+  scenes.forEach((scene) => {
+    const clipBlock = `clip_video_${scene.index}`;
+    const imageBlock = `imagen_escena_${scene.index}`;
+    order.push({
+      paso: order.length + 1,
+      bloque: clipBlock,
+      agente: 'AG-04',
+      accion: 'generar_video',
+      depende_de: imageBlocks,
+      requiere_aprobacion_usuario: false,
+      puede_paralelizarse: true,
+      nota: `Convertir imagen de la escena ${scene.index} en clip de 5 segundos. ${scene.content}${scene.transition ? ` Transicion sugerida: ${scene.transition}.` : ''} ${scene.visualBible}`,
+      metadata: {
+        scene_index: scene.index,
+        scene_title: scene.title,
+        scene_content: scene.content,
+        clip_duration_seconds: 5,
+        visual_bible: scene.visualBible,
+      },
+    });
+  });
+
+  order.push({
+    paso: order.length + 1,
+    bloque: 'video_ensamblado',
+    agente: 'AG-07',
+    accion: 'ensamblar_video',
+    depende_de: clipBlocks,
+    requiere_aprobacion_usuario: false,
+    puede_paralelizarse: false,
+    nota: `Unir ${scenes.length} clips de 5 segundos en el video final.`,
+  });
+
+  order.push({
+    paso: order.length + 1,
+    bloque: 'revision_final',
+    agente: 'AG-07',
+    accion: 'revisar_y_consolidar',
+    depende_de: ['video_ensamblado'],
+    requiere_aprobacion_usuario: false,
+    puede_paralelizarse: false,
+    nota: 'Validar que el video final sea descargable y consistente.',
+  });
+
+  return order;
+}
+
+function expandVideoStoryboardBlocks(pipelineId, guionResult = {}) {
+  const ctx = contextManager.getContext(pipelineId);
+  if (!ctx) return false;
+
+  const seedTemplate = ctx?.template?.seed_template || {};
+  const alreadyExpanded = Array.isArray(seedTemplate?.orden_produccion)
+    && seedTemplate.orden_produccion.some(step => /^imagen_escena_\d+$/i.test(step?.bloque || ''));
+  if (alreadyExpanded) return false;
+
+  const scenes = buildStoryboardScenes(ctx, guionResult);
+  if (!scenes.length) return false;
+
+  const newOrder = buildStoryboardOrderFromScenes(scenes);
+  const requiredBlocks = newOrder.map(step => step.bloque);
+  const hydratedAt = new Date().toISOString();
+  const existingBlocks = { ...(ctx.bloques || {}) };
+
+  newOrder.forEach((step, index) => {
+    existingBlocks[step.bloque] = {
+      ...(existingBlocks[step.bloque] || {}),
+      nombre: step.bloque,
+      estado: existingBlocks[step.bloque]?.estado || (step.bloque === 'guion_escenas' ? 'completada' : 'pendiente'),
+      paso: index + 1,
+      agente_responsable: step.agente,
+      accion_inicial: step.accion,
+      depende_de: Array.isArray(step.depende_de) ? step.depende_de : [],
+      requiere_aprobacion_usuario: Boolean(step.requiere_aprobacion_usuario),
+      puede_paralelizarse: Boolean(step.puede_paralelizarse),
+      nota: step.nota || null,
+      metadata: step.metadata || existingBlocks[step.bloque]?.metadata || null,
+      actualizado_en: hydratedAt,
+    };
+  });
+
+  if (existingBlocks.clips_video) {
+    existingBlocks.clips_video = {
+      ...existingBlocks.clips_video,
+      estado: 'expandido',
+      nota: 'Bloque generico reemplazado por clip_video_1..N',
+      actualizado_en: hydratedAt,
+    };
+  }
+
+  const newQueue = newOrder.map(step => {
+    const existingTask = (ctx.cola_tareas || []).find(task => task?.bloque === step.bloque);
+    return {
+      tarea_id: existingTask?.tarea_id || `${step.agente}-${step.paso}-${step.bloque}`,
+      paso: step.paso,
+      bloque: step.bloque,
+      agente: step.agente,
+      accion: step.accion,
+      depende_de: Array.isArray(step.depende_de) ? step.depende_de : [],
+      estado: existingBlocks[step.bloque]?.estado === 'completada' ? 'completada' : 'pendiente',
+      prioridad: existingTask?.prioridad || 'normal',
+      paralelizable: Boolean(step.puede_paralelizarse),
+      actualizado_en: hydratedAt,
+    };
+  });
+
+  contextManager.patchContext(pipelineId, {
+    template: {
+      seed_template: {
+        ...seedTemplate,
+        bloques_requeridos: requiredBlocks,
+        orden_produccion: newOrder,
+      },
+    },
+    bloques: existingBlocks,
+    cola_tareas: newQueue,
+  });
+
+  contextManager.recordEvent(pipelineId, {
+    tipo: 'storyboard_expanded',
+    fuente: 'AG-01',
+    mensaje: `El piloto expandio el storyboard a ${scenes.length} escenas con imagen y clip por escena.`,
+    payload: {
+      escenas: scenes.map(scene => ({
+        index: scene.index,
+        title: scene.title,
+        content: scene.content,
+      })),
+    },
+  });
+
+  emit(pipelineId, 'message', 'PILOTO', `[PILOTO] Storyboard expandido a ${scenes.length} escenas: imagen_escena_n -> clip_video_n -> ensamblaje.`);
+  emitContextSnapshot(pipelineId);
+  return true;
 }
 
 // Returns only the blocks relevant to each agent, to avoid sending unnecessary context.
@@ -1601,6 +2043,17 @@ function buildAgentInput(pipelineId, agente_id, accion, parametros, bloqueDestin
       },
     } : {}),
   };
+  const compactContextSlice = {
+    pipeline: compactForLLM(contextSlice.pipeline, 1),
+    template: compactForLLM(contextSlice.template, 1),
+    preferencias_usuario: summarizePreferencesForLLM(contextSlice.preferencias_usuario || {}),
+    bloques: summarizeBloquesForLLM(contextSlice.bloques || {}, agente_id === 'AG-07' ? 8 : MAX_CONTEXT_BLOCKS_PER_AGENT),
+    ...(needsAllAssets ? { assets: compactForLLM(contextSlice.assets || {}, 1) } : {}),
+    ...(needsAssembly || needsAllAssets ? {
+      outputs: compactForLLM((contextSlice.outputs || []).slice(0, 6), 1),
+      ensamblaje: compactForLLM(contextSlice.ensamblaje || {}, 1),
+    } : {}),
+  };
 
   const videoClipsSection = video_clips_disponibles
     ? `\n\nVIDEO CLIPS DISPONIBLES PARA ENSAMBLAR (en orden):\n${JSON.stringify(video_clips_disponibles, null, 2)}\n\nPara unir estos videos usa la skill SKL-08 incluyendo en tu respuesta:\n{\n  "skill": "SKL-08",\n  "accion": "merge_videos",\n  "parametros": {\n    "videos": [lista de video_url en orden],\n    "nombre_archivo": "video_final_ensamblado"\n  }\n}`
@@ -1631,7 +2084,7 @@ Debes leer el contexto operativo y responder SOLO con JSON valido usando este co
 }
 
 Contexto operativo relevante:
-${JSON.stringify(contextSlice, null, 2)}`;
+${JSON.stringify(compactContextSlice, null, 2)}`;
 }
 
 function parseAgentResult(raw) {

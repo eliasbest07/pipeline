@@ -735,6 +735,192 @@ function deleteContext(pipelineId) {
 const MAX_PIPELINE_BLOCKS = 12;
 const MAX_PIPELINE_STEPS  = 12;
 
+function dedupeList(values = []) {
+  return [...new Set((Array.isArray(values) ? values : []).filter(Boolean))];
+}
+
+function resolveStepDependencies(order = [], dependeDe = []) {
+  if (!Array.isArray(dependeDe)) return [];
+  return dependeDe
+    .map(dep => {
+      if (typeof dep === 'number') {
+        return order.find(step => Number(step?.paso) === dep)?.bloque || null;
+      }
+      const depStr = String(dep || '').trim();
+      if (/^\d+$/.test(depStr)) {
+        return order.find(step => Number(step?.paso) === Number(depStr))?.bloque || null;
+      }
+      return depStr || null;
+    })
+    .filter(Boolean);
+}
+
+function isVideoPipelineSeed(seed = {}) {
+  const combined = [
+    seed.template_id,
+    seed.descripcion,
+    seed.resultado_final,
+    ...(Array.isArray(seed.bloques_requeridos) ? seed.bloques_requeridos : []),
+  ].join(' ').toLowerCase();
+  return /video|clip|clips|tiktok|reels|shorts?|youtube/.test(combined);
+}
+
+function normalizeVideoStep(step = {}, index = 0) {
+  const blockName = String(step?.bloque || '').toLowerCase();
+  const actionName = String(step?.accion || '').toLowerCase();
+  const note = String(step?.nota || '').toLowerCase();
+  const combined = `${blockName} ${actionName} ${note}`;
+
+  if (blockName === 'preferencias_usuario' || /preferenc/.test(combined)) {
+    return {
+      paso: index + 1,
+      bloque: 'preferencias_usuario',
+      agente: 'AG-05',
+      accion: 'recopilar_preferencias_usuario',
+      requiere_aprobacion_usuario: false,
+      puede_paralelizarse: false,
+      nota: step?.nota || 'Recopilar tema, estilo y duración del video.',
+    };
+  }
+
+  if (/revision_final|revisar_video|revisi/.test(combined)) {
+    return {
+      paso: index + 1,
+      bloque: 'revision_final',
+      agente: 'AG-07',
+      accion: 'revisar_y_consolidar',
+      requiere_aprobacion_usuario: false,
+      puede_paralelizarse: false,
+      nota: step?.nota || 'Revisión final del video ensamblado.',
+    };
+  }
+
+  if (/ensambl|unir_clips|agregar_musica|musica|transicion|transici|final/.test(combined)) {
+    return {
+      paso: index + 1,
+      bloque: 'video_ensamblado',
+      agente: 'AG-07',
+      accion: 'ensamblar_video',
+      requiere_aprobacion_usuario: false,
+      puede_paralelizarse: false,
+      nota: step?.nota || 'Unir clips en un solo video final.',
+    };
+  }
+
+  if (
+    /guion|script|narraci|storyboard|sinopsis|escritura|outline|descripcion.*escena|escena.*descripcion/.test(combined)
+    || blockName === 'guion_escenas'
+    || actionName === 'generar_guion'
+  ) {
+    return {
+      paso: index + 1,
+      bloque: 'guion_escenas',
+      agente: 'AG-03',
+      accion: 'generar_guion',
+      requiere_aprobacion_usuario: false,
+      puede_paralelizarse: false,
+      nota: step?.nota || 'Preparar guion y descripción de escenas.',
+    };
+  }
+
+  if (/clip|video|escena/.test(combined)) {
+    return {
+      paso: index + 1,
+      bloque: 'clips_video',
+      agente: 'AG-04',
+      accion: 'generar_video',
+      requiere_aprobacion_usuario: false,
+      puede_paralelizarse: true,
+      nota: step?.nota || 'Generar clips de video a partir del guion.',
+    };
+  }
+
+  return {
+    paso: index + 1,
+    bloque: 'guion_escenas',
+    agente: 'AG-03',
+    accion: 'generar_guion',
+    requiere_aprobacion_usuario: false,
+    puede_paralelizarse: false,
+    nota: step?.nota || 'Preparar guion y descripción de escenas.',
+  };
+}
+
+function canonicalizeVideoSeed(seed = {}) {
+  const prefs = Array.isArray(seed.preferencias_requeridas) ? seed.preferencias_requeridas : [];
+  const rawOrder = Array.isArray(seed.orden_produccion) ? seed.orden_produccion : [];
+  const normalizedOrder = rawOrder.map((step, index) => normalizeVideoStep(step, index));
+  const byBlock = new Map();
+
+  normalizedOrder.forEach(step => {
+    if (!byBlock.has(step.bloque)) byBlock.set(step.bloque, step);
+  });
+
+  if (!byBlock.has('preferencias_usuario')) {
+    byBlock.set('preferencias_usuario', normalizeVideoStep({ bloque: 'preferencias_usuario' }, 0));
+  }
+  if (!byBlock.has('guion_escenas')) {
+    byBlock.set('guion_escenas', normalizeVideoStep({ bloque: 'guion_escenas', accion: 'generar_guion' }, 1));
+  }
+  if (!byBlock.has('clips_video')) {
+    byBlock.set('clips_video', normalizeVideoStep({ bloque: 'clips_video', accion: 'generar_video' }, 2));
+  }
+  if (!byBlock.has('video_ensamblado')) {
+    byBlock.set('video_ensamblado', normalizeVideoStep({ bloque: 'video_ensamblado', accion: 'ensamblar_video' }, 3));
+  }
+  if (!byBlock.has('revision_final')) {
+    byBlock.set('revision_final', normalizeVideoStep({ bloque: 'revision_final', accion: 'revisar_y_consolidar' }, 4));
+  }
+
+  const orderedBlocks = ['preferencias_usuario', 'guion_escenas', 'clips_video', 'video_ensamblado', 'revision_final']
+    .filter(block => byBlock.has(block));
+
+  const finalOrder = orderedBlocks.map((block, index) => {
+    const base = byBlock.get(block);
+    const depende_de = index === 0 ? [] : [orderedBlocks[index - 1]];
+    return {
+      ...base,
+      paso: index + 1,
+      bloque: block,
+      depende_de,
+    };
+  });
+
+  return {
+    ...seed,
+    template_id: seed.template_id || 'video_pipeline',
+    bloques_requeridos: orderedBlocks,
+    orden_produccion: finalOrder,
+    preferencias_requeridas: prefs,
+    reglas_especiales: dedupeList([
+      ...(Array.isArray(seed.reglas_especiales) ? seed.reglas_especiales : []),
+      'Para video final, usar AG-07 con SKL-08 para concatenar clips.',
+    ]),
+  };
+}
+
+function normalizeSeedTemplate(seed) {
+  if (!seed || typeof seed !== 'object') return seed;
+  const normalized = { ...seed };
+  const rawOrder = Array.isArray(normalized.orden_produccion) ? normalized.orden_produccion : [];
+
+  normalized.bloques_requeridos = dedupeList(
+    Array.isArray(normalized.bloques_requeridos) ? normalized.bloques_requeridos : []
+  );
+
+  normalized.orden_produccion = rawOrder.map((step, index) => ({
+    ...step,
+    paso: Number(step?.paso) || index + 1,
+    depende_de: resolveStepDependencies(rawOrder, step?.depende_de),
+  }));
+
+  if (isVideoPipelineSeed(normalized)) {
+    return canonicalizeVideoSeed(normalized);
+  }
+
+  return normalized;
+}
+
 function clampSeedTemplate(seed) {
   if (!seed) return seed;
   const clamped = { ...seed };
@@ -754,7 +940,7 @@ function clampSeedTemplate(seed) {
 }
 
 function saveSeed(pipelineId, seedTemplate, agentMenu) {
-  const safeSeed = clampSeedTemplate(seedTemplate);
+  const safeSeed = clampSeedTemplate(normalizeSeedTemplate(seedTemplate));
   const normalizedAgentMenu = normalizeAgentMenu(agentMenu, safeSeed);
   db.upsertSeed.run(pipelineId, JSON.stringify(safeSeed), JSON.stringify(normalizedAgentMenu));
 

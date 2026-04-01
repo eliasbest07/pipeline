@@ -9,6 +9,7 @@ const skl04 = require('./skl04-file-rw');
 const skl05 = require('./skl05-audio-tts');
 const skl07 = require('./skl07-api-rest');
 const skl08 = require('./skl08-video-merge');
+const skl09 = require('./skl09-pdf-gen');
 
 const SKILLS = {
   'SKL-01': skl01,
@@ -16,6 +17,7 @@ const SKILLS = {
   'SKL-05': skl05,
   'SKL-07': skl07,
   'SKL-08': skl08,
+  'SKL-09': skl09,
 };
 
 const SKILL_NAMES = {
@@ -24,6 +26,7 @@ const SKILL_NAMES = {
   'SKL-05': 'AUDIO TTS',
   'SKL-07': 'API REST',
   'SKL-08': 'VIDEO MERGE',
+  'SKL-09': 'PDF GEN',
 };
 
 /**

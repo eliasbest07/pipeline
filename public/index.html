@@ -222,30 +222,39 @@
 <!-- TOOLBAR -->
 <div id="toolbar">
   <div class="toolbar-frame">
-    <button class="trun" id="run-btn-main" onclick="runAll()">
-      <span class="trun-ico">▶</span>
-      <span class="trun-lbl">Ejecutar</span>
-    </button>
-    <button class="tool-btn tb-col" id="stop-btn-mini" onclick="stopAll()">
-      <span class="tb-stop-ico">■</span>
-      <span>stop</span>
-    </button>
-    <span id="run-timer" aria-live="polite">00:00</span>
-    <div class="tsep"></div>
-    <button class="tool-btn" onclick="resetAll()">Rest</button>
-    <div class="tsep"></div>
-    <button class="tool-btn" id="add-agent-btn" onclick="toggleAddAgentMenu(event)"><span style="font-size:15px;margin-right:4px;line-height:1">+</span>Agregar</button>
-    <button class="tool-btn" onclick="fitAll()">Centrar</button>
-    <div class="tsep"></div>
-    <button class="tool-btn tb-col" id="mtwbtn" onclick="toggleMTWin()"><span>LLM</span><span>Modelos</span></button>
-    <button class="tool-btn" id="fsbtn" onclick="cycleFontScale()">Aa+</button>
-    <button class="tool-btn tb-col" id="bestpoint-btn" onclick="bestPoint()"><span>⬡ Best</span><span>points</span></button>
-    <div class="tsep"></div>
-    <button class="tool-btn tb-col tb-hist" onclick="openSide()">
-      <svg viewBox="0 0 14 10" width="14" height="10" fill="none" stroke="currentColor" stroke-width="1.4"><line x1="0" y1="1" x2="14" y2="1"/><line x1="0" y1="5" x2="14" y2="5"/><line x1="0" y1="9" x2="14" y2="9"/></svg>
-      <span>Historial</span>
-    </button>
-    <span id="pipe-label" style="display:none">Pipeline</span>
+    <div class="toolbar-main-row">
+      <button class="trun" id="run-btn-main" onclick="runAll()">
+        <span class="trun-ico">▶</span>
+        <span class="trun-lbl">Ejecutar</span>
+      </button>
+      <button class="tool-btn tb-col" id="stop-btn-mini" onclick="stopAll()">
+        <span class="tb-stop-ico">■</span>
+        <span>stop</span>
+      </button>
+      <span id="run-timer" aria-live="polite">00:00</span>
+      <div class="tsep"></div>
+      <button class="tool-btn" onclick="resetAll()">Rest</button>
+      <div class="tsep"></div>
+      <button class="tool-btn" id="add-agent-btn" onclick="toggleAddAgentMenu(event)"><span style="font-size:15px;margin-right:4px;line-height:1">+</span>Agregar</button>
+      <button class="tool-btn" onclick="fitAll()">Centrar</button>
+      <div class="tsep"></div>
+      <button class="tool-btn tb-col" id="mtwbtn" onclick="toggleMTWin()"><span>LLM</span><span>Modelos</span></button>
+      <button class="tool-btn" id="fsbtn" onclick="cycleFontScale()">Aa+</button>
+      <button class="tool-btn tb-col" id="bestpoint-btn" onclick="bestPoint()"><span>⬡ Best</span><span>points</span></button>
+      <div class="tsep"></div>
+      <button class="tool-btn tb-col tb-hist" onclick="openSide()">
+        <svg viewBox="0 0 14 10" width="14" height="10" fill="none" stroke="currentColor" stroke-width="1.4"><line x1="0" y1="1" x2="14" y2="1"/><line x1="0" y1="5" x2="14" y2="5"/><line x1="0" y1="9" x2="14" y2="9"/></svg>
+        <span>Historial</span>
+      </button>
+      <span id="pipe-label" style="display:none">Pipeline</span>
+    </div>
+    <div id="toolbar-models-line">
+      <div class="toolbar-models-actions">
+        <button class="toolbar-preset-btn" onclick="applyModelPreset('free')">Gratis</button>
+        <button class="toolbar-preset-btn premium" onclick="applyModelPreset('pro')">Pro</button>
+      </div>
+      <div id="toolbar-models-strip"></div>
+    </div>
   </div>
 </div>
 <div id="add-agent-menu" class="add-agent-menu hidden">
@@ -340,12 +349,9 @@
     <div id="mt-models-section">
       <div class="mt-models-toolbar">
         <div class="mt-models-title">Modelos activos</div>
-        <div class="mt-preset-actions">
-          <button class="mt-preset-btn" onclick="applyModelPreset('free')">Gratis</button>
-          <button class="mt-preset-btn premium" onclick="applyModelPreset('pro')">Pro</button>
-        </div>
+        <div class="mt-models-title">Lista completa por agente</div>
       </div>
-      <div id="mt-models-rows" class="mt-models-strip"></div>
+      <div id="mt-models-rows"></div>
     </div>
     <div class="mt-divider"></div>
     <div id="mt-tokens-section">

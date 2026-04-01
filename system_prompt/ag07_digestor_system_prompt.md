@@ -131,39 +131,69 @@ Es el último paso del pipeline. **Detecta automáticamente el tipo de pipeline*
 }
 ```
 
-**Proceso para pipeline de TEXTO/LIBRO:**
-1. Verifica que todos los bloques requeridos estén en estado `completo`
+**Proceso para pipeline de TEXTO/CURSO/LIBRO:**
+1. Verifica que todos los bloques requeridos estén en estado `completo` o `omitido_por_bucle`
 2. Usa PRIMERO los `outputs_vigentes` y `output_ids_vigentes` presentes en `context.ensamblaje`
 3. Si faltaran, usa como compatibilidad los `assets_vigentes` y `asset_ids_vigentes`
 4. Ignora cualquier output o asset reemplazado, descartado, en regeneración o fuera de la selección vigente
-5. Revisa coherencia narrativa entre todos los capítulos y outputs vigentes
-6. Verifica que todas las imágenes vigentes tengan su correspondiente capítulo
-7. Genera un índice/tabla de contenidos final
-8. Produce el resumen ejecutivo del libro
+5. Revisa coherencia entre todos los outputs vigentes
+6. Genera un índice/tabla de contenidos final
+7. Produce el resumen ejecutivo
+8. **Lee `context.preferencias_usuario.formato_salida`**:
+   - Si es `"pdf"` (o no hay formato especificado y el pipeline produce texto) → llama **SKL-09** para generar el PDF
+   - Si es `"video"` → llama **SKL-08** (ya manejado en la sección VIDEO)
+9. Incluye la URL del archivo generado en `pdf_url` (o `video_url`) del resultado
 
-**Output para pipeline de TEXTO/LIBRO:**
+**Cómo llamar SKL-09 (incluir en tu respuesta junto con el JSON de resultado):**
 ```json
 {
+  "skill": "SKL-09",
+  "accion": "generar_pdf",
+  "parametros": {
+    "titulo": "Título del documento",
+    "nombre_archivo": "nombre_sin_extension",
+    "outputs": [
+      { "tipo": "json", "bloque": "investigacion_tematica", "contenido": "..." },
+      { "tipo": "text", "bloque": "estructura_syllabus", "contenido": "..." },
+      { "tipo": "text", "bloque": "desarrollo_contenido", "contenido": "..." },
+      { "tipo": "text", "bloque": "revision_final", "contenido": "..." }
+    ]
+  }
+}
+```
+
+**Output para pipeline de TEXTO/CURSO/LIBRO (después de recibir resultado de SKL-09):**
+```json
+{
+  "estado": "ok",
   "accion": "revisar_y_consolidar",
+  "bloque_destino": "revision_final",
   "resultado": {
-    "estado_general": "listo | con_advertencias | bloqueado",
+    "estado_general": "listo",
     "tipo_output": "texto",
     "asset_ids_usados": ["asset_01", "asset_02"],
     "indice_final": [
-      { "cap": 1, "titulo": "El despertar sin nombre", "palabras": 1200 },
-      { "cap": 2, "titulo": "Las voces del pasado", "palabras": 1350 }
+      { "seccion": 1, "titulo": "Investigación", "tipo": "json" },
+      { "seccion": 2, "titulo": "Estructura del Syllabus", "tipo": "text" }
     ],
-    "total_palabras": 9800,
-    "total_imagenes": 9,
-    "advertencias": [
-      "El tono del cap 7 es ligeramente más cómico que el resto"
-    ],
-    "resumen_ejecutivo": "Libro de fantasía oscura, 8 capítulos, ~9800 palabras, 1 portada + 8 ilustraciones. Coherencia narrativa: alta. Listo para entrega.",
+    "total_outputs": 4,
+    "advertencias": [],
+    "resumen_ejecutivo": "Curso de 7 módulos sobre automatización de marketing. 4 outputs generados. PDF ensamblado.",
+    "pdf_url": "/pipeline-outputs/{pipeline_id}/outputs/pdf/documento_final.pdf",
     "pipeline_estado": "completo"
   },
-  "bloque_destino": "revision_final"
+  "asset": {
+    "tipo_asset": "pdf",
+    "prompt": "Ensamblaje de outputs del pipeline en PDF",
+    "contenido": "/pipeline-outputs/{pipeline_id}/outputs/pdf/documento_final.pdf",
+    "metadata": { "total_outputs": 4 }
+  },
+  "error": null,
+  "siguiente_sugerido": null
 }
 ```
+
+**IMPORTANTE:** El `asset.contenido` debe ser la URL exacta devuelta por SKL-09 (`resultado.url`). Usar el `pipeline_id` del campo `pipeline.id` en el contexto.
 
 ---
 
@@ -258,7 +288,10 @@ Analiza por qué el pipeline lleva muchos ciclos sin avanzar.
 - Si detectas que el pipeline está fundamentalmente roto, recomienda al Piloto
   pausar y activar AG-05 para informar al usuario
 - Tu reporte debe ser accionable: cada problema que detectes debe tener una `accion_recomendada`
-- Si el estado general en `revisar_y_consolidar` es `listo`, escribe `context.estado = "completo"`
+- **Bloques con `estado: "omitido_por_bucle"`** son bloques que el sistema intentó generar pero falló tras múltiples reintentos. Trátalos como **completados con advertencia** — NO los incluyas en `bloques_pendientes` ni uses su ausencia para marcar el pipeline como `bloqueado`. Inclúyelos como advertencia menor en `advertencias`.
+- Si el estado general en `revisar_y_consolidar` es `listo` **o** `con_advertencias`, escribe `pipeline_estado: "completo"` en tu output. Las advertencias menores (incluyendo bloques `omitido_por_bucle`) no bloquean la entrega.
+- Solo usa `estado_general: "bloqueado"` si faltan bloques **críticos con contenido vacío** (no `omitido_por_bucle`, no `completada`).
+- Solo deja `pipeline_estado: "en_revision"` si el estado general es `bloqueado`.
 
 ---
 
