@@ -26,7 +26,16 @@ const MODELS_CATALOG = {
     { id: 'o1-mini',                   label: 'o1-mini',               tier: 'balanced', ctx: 128000 },
   ],
   openrouter: [
-    { id: 'openrouter/free',           label: 'OpenRouter Free Router', tier: 'fast',    ctx: 200000 },
+    { id: 'openrouter/free',                          label: 'Free Router',           tier: 'fast',     ctx: 200000 },
+    { id: 'anthropic/claude-opus-4-6',                label: 'Claude Opus 4.6',       tier: 'premium',  ctx: 200000 },
+    { id: 'anthropic/claude-sonnet-4-6',              label: 'Claude Sonnet 4.6',     tier: 'balanced', ctx: 200000 },
+    { id: 'anthropic/claude-haiku-4-5',               label: 'Claude Haiku 4.5',      tier: 'fast',     ctx: 200000 },
+    { id: 'openai/gpt-4o',                            label: 'GPT-4o',                tier: 'premium',  ctx: 128000 },
+    { id: 'openai/gpt-4o-mini',                       label: 'GPT-4o Mini',           tier: 'fast',     ctx: 128000 },
+    { id: 'google/gemini-2.0-flash-001',              label: 'Gemini 2.0 Flash',      tier: 'fast',     ctx: 1000000 },
+    { id: 'meta-llama/llama-3.3-70b-instruct',        label: 'Llama 3.3 70B',         tier: 'balanced', ctx: 128000 },
+    { id: 'meta-llama/llama-3.1-8b-instruct:free',    label: 'Llama 3.1 8B (free)',   tier: 'fast',     ctx: 128000 },
+    { id: 'mistralai/mistral-small-3.1-24b-instruct', label: 'Mistral Small 3.1',     tier: 'fast',     ctx: 128000 },
   ],
   fal: [
     { id: 'fal-ai/flux/schnell',       label: 'FLUX Schnell',          tier: 'fast',     ctx: null },
