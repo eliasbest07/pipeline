@@ -8,6 +8,9 @@
     "dev": "node --watch server.js",
     "test:e2e:pipeline": "node test-pipeline-e2e.js"
   },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
     "@fal-ai/client": "^1.9.4",
